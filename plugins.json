@@ -5,8 +5,18 @@
     "description": "Cross-device playback sync via GitHub Gists — exact timestamp, watch history, and resume state.",
     "version": 1,
     "url": "https://raw.githubusercontent.com/DeepBlue9789/cloudsync/main/CloudSync.cs3",
-    "authors": ["CloudSyncDev"],
-    "tvTypes": ["Movie", "TvSeries", "Anime", "OVA", "Cartoon"],
-    "language": "en"
+    "authors": [
+      "CloudSyncDev"
+    ],
+    "tvTypes": [
+      "Movie",
+      "TvSeries",
+      "Anime",
+      "OVA",
+      "Cartoon"
+    ],
+    "language": "en",
+    "hasSettings": true,
+    "status": 1
   }
 ]
