@@ -1,0 +1,8 @@
+{
+  "name": "CloudSync Repo",
+  "description": "Cross-device playback sync via GitHub Gists",
+  "manifestVersion": 1,
+  "pluginLists": [
+    "https://raw.githubusercontent.com/DeepBlue9789/cloudsync/main/plugins.json"
+  ]
+}
