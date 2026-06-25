@@ -30,7 +30,7 @@ class CloudSyncPlugin : Plugin() {
 
     companion object {
         private const val TAG = "CloudSync"
-        private const val SYNC_DEBOUNCE_MS = 5_000L // 5s debounce for auto-sync
+        private const val SYNC_DEBOUNCE_MS = 2_000L // 2s debounce for auto-sync (reduced from 5s for faster backgrounding)
         internal const val CREDS_KEY = "CLOUDSYNC_CREDENTIALS"
         internal const val LAST_SYNC_KEY = "CLOUDSYNC_LAST_SYNC"
         internal const val LAST_SYNC_RESULT_KEY = "CLOUDSYNC_LAST_RESULT"
@@ -128,7 +128,9 @@ class CloudSyncPlugin : Plugin() {
                 // Only trigger on playback-related changes
                 if (key.contains("video_pos_dur") ||
                     key.contains("result_resume_watching") ||
-                    key.contains("result_watch_state")
+                    key.contains("result_watch_state") ||
+                    key.contains("result_episode") ||
+                    key.contains("result_season")
                 ) {
                     Log.d(TAG, "Detected playback change: $key")
                     scheduleDebouncedSync(context)
