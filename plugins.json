@@ -3,7 +3,7 @@
     "name": "CloudSync",
     "internalName": "CloudSync",
     "description": "Cross-device playback sync via GitHub Gists — exact timestamp, watch history, and resume state.",
-    "version": 3,
+    "version": 2,
     "url": "https://raw.githubusercontent.com/DeepBlue9789/cloudsync/main/CloudSync.cs3",
     "authors": [
       "CloudSyncDev"
