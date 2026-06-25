@@ -1,7 +1,4 @@
-﻿.gradle/
+.gradle/
 local.properties
 build/
-CloudSync/build/intermediates/
-CloudSync/build/tmp/
-CloudSync/build/kotlin/
-CloudSync/build/generated/
+CloudSync/build/
