@@ -11,7 +11,7 @@ dependencies {
 }
 
 // use an integer for version numbers
-version = 2
+version = 3
 
 cloudstream {
     description = "Cross-device playback sync via GitHub — syncs exact playback position, watch history, and resume state so half-watched movies and episodes pick up right where you left off on any device."
