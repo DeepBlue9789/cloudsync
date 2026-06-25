@@ -137,28 +137,26 @@ object LocalDataManager {
                     val jsonStr = value as? String ?: continue
                     val posDur = mapper.readValue<PosDur>(jsonStr)
 
-                    if (posDur.duration > 0) {
-                        val percentage = if (posDur.duration > 0) {
-                            (posDur.position.toFloat() / posDur.duration.toFloat()) * 100f
-                        } else 0f
-                        
-                        val cached = cache[mediaId]
-                        val timestamp = if (cached != null && cached.position == posDur.position && cached.duration == posDur.duration) {
-                            cached.timestamp
-                        } else {
-                            cacheUpdated = true
-                            val now = System.currentTimeMillis()
-                            cache[mediaId] = CachedPos(posDur.position, posDur.duration, now)
-                            now
-                        }
-
-                        positions[mediaId] = PlaybackPosition(
-                            position = posDur.position,
-                            duration = posDur.duration,
-                            percentage = percentage,
-                            lastUpdated = timestamp
-                        )
+                    val percentage = if (posDur.duration > 0) {
+                        (posDur.position.toFloat() / posDur.duration.toFloat()) * 100f
+                    } else 0f
+                    
+                    val cached = cache[mediaId]
+                    val timestamp = if (cached != null && cached.position == posDur.position) {
+                        cached.timestamp
+                    } else {
+                        cacheUpdated = true
+                        val now = System.currentTimeMillis()
+                        cache[mediaId] = CachedPos(posDur.position, posDur.duration, now)
+                        now
                     }
+
+                    positions[mediaId] = PlaybackPosition(
+                        position = posDur.position,
+                        duration = posDur.duration,
+                        percentage = percentage,
+                        lastUpdated = timestamp
+                    )
                 } catch (e: Exception) {
                     Log.w(TAG, "Failed to parse pos/dur for key $key: ${e.message}")
                 }
