@@ -14,7 +14,18 @@ data class SyncPayload(
     @JsonProperty("deviceName") val deviceName: String = "",
     @JsonProperty("watchHistory") val watchHistory: Map<String, WatchEntry> = emptyMap(),
     @JsonProperty("playbackPositions") val playbackPositions: Map<String, PlaybackPosition> = emptyMap(),
-    @JsonProperty("resumeWatching") val resumeWatching: Map<String, ResumeEntry> = emptyMap()
+    @JsonProperty("resumeWatching") val resumeWatching: Map<String, ResumeEntry> = emptyMap(),
+    @JsonProperty("preferences") val preferences: Map<String, PrefEntry> = emptyMap()
+)
+
+/**
+ * A simple preference entry to store primitive types from SharedPreferences.
+ * Used for syncing profiles and source priority settings.
+ */
+data class PrefEntry(
+    @JsonProperty("valueStr") val valueStr: String = "",
+    @JsonProperty("type") val type: String = "String",
+    @JsonProperty("lastUpdated") val lastUpdated: Long = 0L
 )
 
 /**

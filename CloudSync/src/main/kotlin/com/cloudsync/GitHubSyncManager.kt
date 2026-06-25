@@ -37,6 +37,7 @@ object GitHubSyncManager {
         val localPositions = LocalDataManager.readAllPlaybackPositions(context)
         val localHistory = LocalDataManager.readAllWatchHistory(context)
         val localResume = LocalDataManager.readAllResumeWatching(context)
+        val localPrefs = LocalDataManager.readAllPreferences(context)
 
         val localPayload = SyncPayload(
             version = 1,
@@ -45,7 +46,8 @@ object GitHubSyncManager {
             deviceName = creds.deviceName,
             watchHistory = localHistory,
             playbackPositions = localPositions,
-            resumeWatching = localResume
+            resumeWatching = localResume,
+            preferences = localPrefs
         )
 
         // Step 3: Fetch remote data
@@ -82,7 +84,8 @@ object GitHubSyncManager {
 
         val totalItems = merged.playbackPositions.size +
             merged.watchHistory.size +
-            merged.resumeWatching.size
+            merged.resumeWatching.size +
+            merged.preferences.size
 
         Log.d(TAG, "Sync complete: $totalItems total items, $itemsPulled pulled from remote")
 
@@ -109,6 +112,7 @@ object GitHubSyncManager {
         val localPositions = LocalDataManager.readAllPlaybackPositions(context)
         val localHistory = LocalDataManager.readAllWatchHistory(context)
         val localResume = LocalDataManager.readAllResumeWatching(context)
+        val localPrefs = LocalDataManager.readAllPreferences(context)
 
         // Fetch remote and merge to avoid losing other device's data
         val remotePayload = GitHubApiClient.fetchGist(creds.token, gistId)
@@ -119,7 +123,8 @@ object GitHubSyncManager {
             deviceName = creds.deviceName,
             watchHistory = localHistory,
             playbackPositions = localPositions,
-            resumeWatching = localResume
+            resumeWatching = localResume,
+            preferences = localPrefs
         )
 
         val merged = if (remotePayload != null) {
@@ -132,8 +137,8 @@ object GitHubSyncManager {
 
         return SyncResult(
             success = success,
-            message = if (success) "Pushed ${merged.playbackPositions.size + merged.watchHistory.size} items" else "Push failed",
-            itemsPushed = merged.playbackPositions.size + merged.watchHistory.size + merged.resumeWatching.size
+            message = if (success) "Pushed ${merged.playbackPositions.size + merged.watchHistory.size + merged.preferences.size} items" else "Push failed",
+            itemsPushed = merged.playbackPositions.size + merged.watchHistory.size + merged.resumeWatching.size + merged.preferences.size
         )
     }
 
@@ -156,10 +161,12 @@ object GitHubSyncManager {
         val localPositions = LocalDataManager.readAllPlaybackPositions(context)
         val localHistory = LocalDataManager.readAllWatchHistory(context)
         val localResume = LocalDataManager.readAllResumeWatching(context)
+        val localPrefs = LocalDataManager.readAllPreferences(context)
         val localPayload = SyncPayload(
             watchHistory = localHistory,
             playbackPositions = localPositions,
-            resumeWatching = localResume
+            resumeWatching = localResume,
+            preferences = localPrefs
         )
 
         val merged = mergePayloads(localPayload, remotePayload)
@@ -229,6 +236,13 @@ object GitHubSyncManager {
             if (localItem.lastUpdated >= remoteItem.lastUpdated) localItem else remoteItem
         }
 
+        val mergedPrefs = mergeByTimestamp(
+            local.preferences,
+            remote.preferences
+        ) { localItem, remoteItem ->
+            if (localItem.lastUpdated >= remoteItem.lastUpdated) localItem else remoteItem
+        }
+
         return SyncPayload(
             version = 1,
             lastSync = System.currentTimeMillis(),
@@ -236,7 +250,8 @@ object GitHubSyncManager {
             deviceName = local.deviceName.ifBlank { remote.deviceName },
             watchHistory = mergedHistory,
             playbackPositions = mergedPositions,
-            resumeWatching = mergedResume
+            resumeWatching = mergedResume,
+            preferences = mergedPrefs
         )
     }
 
@@ -318,6 +333,19 @@ object GitHubSyncManager {
                 }
                 count++
             }
+        }
+
+        // Write preferences
+        val prefsToWrite = mutableMapOf<String, PrefEntry>()
+        for ((key, mergedPref) in mergedPayload.preferences) {
+            val localPref = localPayload.preferences[key]
+            if (localPref == null || mergedPref.lastUpdated > localPref.lastUpdated) {
+                prefsToWrite[key] = mergedPref
+                count++
+            }
+        }
+        if (prefsToWrite.isNotEmpty()) {
+            LocalDataManager.writePreferences(context, prefsToWrite)
         }
 
         Log.d(TAG, "Wrote $count items from remote to local")

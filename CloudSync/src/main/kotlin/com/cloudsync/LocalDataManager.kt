@@ -418,19 +418,106 @@ object LocalDataManager {
         }
     }
 
-    /**
-     * Get a summary of all local sync-able data for display purposes.
-     */
     fun getSyncSummary(context: Context): Map<String, Int> {
         val positions = readAllPlaybackPositions(context)
         val history = readAllWatchHistory(context)
         val resume = readAllResumeWatching(context)
+        val prefs = readAllPreferences(context)
 
         return mapOf(
             "playbackPositions" to positions.size,
             "watchHistory" to history.size,
             "resumeWatching" to resume.size,
-            "total" to (positions.size + history.size + resume.size)
+            "preferences" to prefs.size,
+            "total" to (positions.size + history.size + resume.size + prefs.size)
         )
+    }
+
+    /**
+     * Read relevant profile and source priority preferences from CloudStream.
+     */
+    fun readAllPreferences(context: Context): Map<String, PrefEntry> {
+        val prefs = context.getSharedPrefs()
+        val allEntries = prefs.all
+        val result = mutableMapOf<String, PrefEntry>()
+        val cache = getStateCache(context, "prefs")
+        var cacheUpdated = false
+
+        for ((key, value) in allEntries) {
+            // Check if key is related to source priority, extensions, or general profiles
+            if (key.contains("priority", ignoreCase = true) || 
+                key.contains("profile", ignoreCase = true) ||
+                (key.contains("source", ignoreCase = true) && key.contains("score", ignoreCase = true)) ||
+                key.startsWith("extension_", ignoreCase = true)
+            ) {
+                
+                val type = when (value) {
+                    is Int -> "Int"
+                    is Boolean -> "Boolean"
+                    is Float -> "Float"
+                    is Long -> "Long"
+                    is String -> "String"
+                    else -> continue
+                }
+                
+                val valueStr = value.toString()
+                val hash = valueStr.hashCode()
+                
+                var updateTime = System.currentTimeMillis()
+                val cached = cache[key]
+                if (cached != null && cached.hash == hash) {
+                    updateTime = cached.timestamp
+                } else {
+                    cacheUpdated = true
+                    cache[key] = CachedState(hash, updateTime)
+                }
+                
+                result[key] = PrefEntry(valueStr, type, updateTime)
+            }
+        }
+        
+        if (cacheUpdated) {
+            saveStateCache(context, "prefs", cache)
+        }
+        
+        Log.d(TAG, "Read ${result.size} preference entries")
+        return result
+    }
+
+    /**
+     * Write profile and source priority preferences back to CloudStream's SharedPreferences.
+     */
+    fun writePreferences(context: Context, entries: Map<String, PrefEntry>) {
+        val prefs = context.getSharedPrefs()
+        val editor = prefs.edit()
+        val cache = getStateCache(context, "prefs")
+        var cacheUpdated = false
+        var count = 0
+        
+        for ((key, entry) in entries) {
+            try {
+                when (entry.type) {
+                    "Int" -> editor.putInt(key, entry.valueStr.toInt())
+                    "Boolean" -> editor.putBoolean(key, entry.valueStr.toBoolean())
+                    "Float" -> editor.putFloat(key, entry.valueStr.toFloat())
+                    "Long" -> editor.putLong(key, entry.valueStr.toLong())
+                    "String" -> editor.putString(key, entry.valueStr)
+                }
+                
+                val hash = entry.valueStr.hashCode()
+                cache[key] = CachedState(hash, entry.lastUpdated)
+                cacheUpdated = true
+                count++
+                
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to write pref $key: ${e.message}")
+            }
+        }
+        
+        editor.apply()
+        if (cacheUpdated) {
+            saveStateCache(context, "prefs", cache)
+        }
+        Log.d(TAG, "Wrote $count preference entries")
     }
 }
