@@ -1,5 +1,6 @@
 package com.cloudsync
 
+import java.io.File
 import android.content.Context
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
@@ -23,8 +24,34 @@ import com.lagradost.cloudstream3.utils.DataStore.getSharedPrefs
  */
 object LocalDataManager {
     private const val TAG = "CloudSync-Local"
+    private const val POS_CACHE_FILE = "cloudsync_pos_cache.json"
 
     private val mapper = jacksonObjectMapper()
+
+    data class CachedPos(
+        val position: Long,
+        val duration: Long,
+        val timestamp: Long
+    )
+
+    private fun getPosCache(context: Context): MutableMap<String, CachedPos> {
+        val file = File(context.filesDir, POS_CACHE_FILE)
+        if (!file.exists()) return mutableMapOf()
+        return try {
+            mapper.readValue(file.readText())
+        } catch (e: Exception) {
+            mutableMapOf()
+        }
+    }
+
+    private fun savePosCache(context: Context, cache: Map<String, CachedPos>) {
+        try {
+            val file = File(context.filesDir, POS_CACHE_FILE)
+            file.writeText(mapper.writeValueAsString(cache))
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to save pos cache: ${e.message}")
+        }
+    }
 
     // CloudStream DataStore key prefixes (from DataStoreHelper.kt)
     private const val VIDEO_POS_DUR = "video_pos_dur"
@@ -51,6 +78,9 @@ object LocalDataManager {
             val prefs = context.getSharedPrefs()
             val allEntries = prefs.all
             val prefix = "${getAccountPrefix()}/$VIDEO_POS_DUR/"
+            
+            val cache = getPosCache(context)
+            var cacheUpdated = false
 
             for ((key, value) in allEntries) {
                 if (!key.startsWith(prefix)) continue
@@ -66,17 +96,31 @@ object LocalDataManager {
                         val percentage = if (posDur.duration > 0) {
                             (posDur.position.toFloat() / posDur.duration.toFloat()) * 100f
                         } else 0f
+                        
+                        val cached = cache[mediaId]
+                        val timestamp = if (cached != null && cached.position == posDur.position && cached.duration == posDur.duration) {
+                            cached.timestamp
+                        } else {
+                            cacheUpdated = true
+                            val now = System.currentTimeMillis()
+                            cache[mediaId] = CachedPos(posDur.position, posDur.duration, now)
+                            now
+                        }
 
                         positions[mediaId] = PlaybackPosition(
                             position = posDur.position,
                             duration = posDur.duration,
                             percentage = percentage,
-                            lastUpdated = System.currentTimeMillis()
+                            lastUpdated = timestamp
                         )
                     }
                 } catch (e: Exception) {
                     Log.w(TAG, "Failed to parse pos/dur for key $key: ${e.message}")
                 }
+            }
+            
+            if (cacheUpdated) {
+                savePosCache(context, cache)
             }
 
             Log.d(TAG, "Read ${positions.size} playback positions")
@@ -111,6 +155,10 @@ object LocalDataManager {
                     // Parse the raw CloudStream watch state data
                     val data = mapper.readValue<Map<String, Any?>>(jsonStr)
 
+                    val updateTime = (data["latestUpdatedTime"] as? Number)?.toLong() 
+                        ?: (data["bookmarkedTime"] as? Number)?.toLong()
+                        ?: System.currentTimeMillis()
+
                     history[mediaId] = WatchEntry(
                         name = data["name"] as? String ?: "",
                         url = data["url"] as? String ?: "",
@@ -119,7 +167,7 @@ object LocalDataManager {
                         posterUrl = data["posterUrl"] as? String,
                         watchState = (data["watchState"] as? Int)
                             ?: (data["watchState"] as? Number)?.toInt() ?: 0,
-                        lastUpdated = System.currentTimeMillis()
+                        lastUpdated = updateTime
                     )
                 } catch (e: Exception) {
                     Log.w(TAG, "Failed to parse watch state for key $key: ${e.message}")
@@ -156,6 +204,8 @@ object LocalDataManager {
                     val jsonStr = value as? String ?: continue
                     val data = mapper.readValue<Map<String, Any?>>(jsonStr)
 
+                    val updateTime = (data["updateTime"] as? Number)?.toLong() ?: System.currentTimeMillis()
+
                     resume[mediaId] = ResumeEntry(
                         name = data["name"] as? String ?: "",
                         url = data["url"] as? String ?: "",
@@ -167,7 +217,7 @@ object LocalDataManager {
                         episode = (data["episode"] as? Number)?.toInt(),
                         season = (data["season"] as? Number)?.toInt(),
                         isFromDownload = data["isFromDownload"] as? Boolean ?: false,
-                        lastUpdated = System.currentTimeMillis(),
+                        lastUpdated = updateTime,
                         rawJson = jsonStr
                     )
                 } catch (e: Exception) {
@@ -187,7 +237,7 @@ object LocalDataManager {
      * Write a playback position back into CloudStream's storage.
      * This is the key operation for restoring exact playback timestamps on another device.
      */
-    fun writePlaybackPosition(context: Context, mediaId: String, position: Long, duration: Long) {
+    fun writePlaybackPosition(context: Context, mediaId: String, position: Long, duration: Long, lastUpdated: Long) {
         try {
             val key = "${getAccountPrefix()}/$VIDEO_POS_DUR/$mediaId"
             val posDur = PosDur(position = position, duration = duration)
@@ -195,6 +245,11 @@ object LocalDataManager {
 
             val prefs = context.getSharedPrefs()
             prefs.edit().putString(key, json).apply()
+            
+            // Update cache so the local device knows about the pulled timestamp
+            val cache = getPosCache(context)
+            cache[mediaId] = CachedPos(position, duration, lastUpdated)
+            savePosCache(context, cache)
 
             Log.d(TAG, "Wrote playback pos for $mediaId: ${position}ms / ${duration}ms")
         } catch (e: Exception) {

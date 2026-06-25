@@ -287,7 +287,13 @@ object GitHubSyncManager {
             if (localPos == null || mergedPos.lastUpdated > localPos.lastUpdated ||
                 (mergedPos.lastUpdated == localPos.lastUpdated && mergedPos.position > localPos.position)
             ) {
-                LocalDataManager.writePlaybackPosition(context, mediaId, mergedPos.position, mergedPos.duration)
+                LocalDataManager.writePlaybackPosition(
+                    context, 
+                    mediaId, 
+                    mergedPos.position, 
+                    mergedPos.duration,
+                    mergedPos.lastUpdated
+                )
                 count++
             }
         }
