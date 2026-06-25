@@ -25,6 +25,7 @@ import com.lagradost.cloudstream3.utils.DataStore.getSharedPrefs
 object LocalDataManager {
     private const val TAG = "CloudSync-Local"
     private const val POS_CACHE_FILE = "cloudsync_pos_cache.json"
+    private const val STATE_CACHE_FILE = "cloudsync_state_cache.json"
 
     private val mapper = jacksonObjectMapper()
 
@@ -33,6 +34,30 @@ object LocalDataManager {
         val duration: Long,
         val timestamp: Long
     )
+
+    data class CachedState(
+        val hash: Int,
+        val timestamp: Long
+    )
+
+    private fun getStateCache(context: Context, prefix: String): MutableMap<String, CachedState> {
+        val file = File(context.filesDir, "${prefix}_$STATE_CACHE_FILE")
+        if (!file.exists()) return mutableMapOf()
+        return try {
+            mapper.readValue(file.readText())
+        } catch (e: Exception) {
+            mutableMapOf()
+        }
+    }
+
+    private fun saveStateCache(context: Context, prefix: String, cache: Map<String, CachedState>) {
+        try {
+            val file = File(context.filesDir, "${prefix}_$STATE_CACHE_FILE")
+            file.writeText(mapper.writeValueAsString(cache))
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to save state cache: ${e.message}")
+        }
+    }
 
     private fun getPosCache(context: Context): MutableMap<String, CachedPos> {
         val file = File(context.filesDir, POS_CACHE_FILE)
@@ -142,6 +167,9 @@ object LocalDataManager {
             val prefs = context.getSharedPrefs()
             val allEntries = prefs.all
             val prefix = "${getAccountPrefix()}/$RESULT_WATCH_STATE_DATA/"
+            
+            val cache = getStateCache(context, "history")
+            var cacheUpdated = false
 
             for ((key, value) in allEntries) {
                 if (!key.startsWith(prefix)) continue
@@ -155,9 +183,20 @@ object LocalDataManager {
                     // Parse the raw CloudStream watch state data
                     val data = mapper.readValue<Map<String, Any?>>(jsonStr)
 
-                    val updateTime = (data["latestUpdatedTime"] as? Number)?.toLong() 
+                    var updateTime = (data["latestUpdatedTime"] as? Number)?.toLong() 
                         ?: (data["bookmarkedTime"] as? Number)?.toLong()
-                        ?: System.currentTimeMillis()
+                        
+                    if (updateTime == null) {
+                        val hash = jsonStr.hashCode()
+                        val cached = cache[mediaId]
+                        if (cached != null && cached.hash == hash) {
+                            updateTime = cached.timestamp
+                        } else {
+                            updateTime = System.currentTimeMillis()
+                            cache[mediaId] = CachedState(hash, updateTime)
+                            cacheUpdated = true
+                        }
+                    }
 
                     history[mediaId] = WatchEntry(
                         name = data["name"] as? String ?: "",
@@ -172,6 +211,10 @@ object LocalDataManager {
                 } catch (e: Exception) {
                     Log.w(TAG, "Failed to parse watch state for key $key: ${e.message}")
                 }
+            }
+            
+            if (cacheUpdated) {
+                saveStateCache(context, "history", cache)
             }
 
             Log.d(TAG, "Read ${history.size} watch history entries")
@@ -193,6 +236,9 @@ object LocalDataManager {
             val prefs = context.getSharedPrefs()
             val allEntries = prefs.all
             val prefix = "${getAccountPrefix()}/$RESULT_RESUME_WATCHING/"
+            
+            val cache = getStateCache(context, "resume")
+            var cacheUpdated = false
 
             for ((key, value) in allEntries) {
                 if (!key.startsWith(prefix)) continue
@@ -204,7 +250,19 @@ object LocalDataManager {
                     val jsonStr = value as? String ?: continue
                     val data = mapper.readValue<Map<String, Any?>>(jsonStr)
 
-                    val updateTime = (data["updateTime"] as? Number)?.toLong() ?: System.currentTimeMillis()
+                    var updateTime = (data["updateTime"] as? Number)?.toLong()
+                    
+                    if (updateTime == null) {
+                        val hash = jsonStr.hashCode()
+                        val cached = cache[mediaId]
+                        if (cached != null && cached.hash == hash) {
+                            updateTime = cached.timestamp
+                        } else {
+                            updateTime = System.currentTimeMillis()
+                            cache[mediaId] = CachedState(hash, updateTime)
+                            cacheUpdated = true
+                        }
+                    }
 
                     resume[mediaId] = ResumeEntry(
                         name = data["name"] as? String ?: "",
@@ -223,6 +281,10 @@ object LocalDataManager {
                 } catch (e: Exception) {
                     Log.w(TAG, "Failed to parse resume entry for key $key: ${e.message}")
                 }
+            }
+            
+            if (cacheUpdated) {
+                saveStateCache(context, "resume", cache)
             }
 
             Log.d(TAG, "Read ${resume.size} resume watching entries")
@@ -280,8 +342,13 @@ object LocalDataManager {
                 "posterUrl" to entry.posterUrl,
                 "watchState" to entry.watchState
             )
-            editor.putString(dataKey, mapper.writeValueAsString(data))
+            val jsonStr = mapper.writeValueAsString(data)
+            editor.putString(dataKey, jsonStr)
             editor.apply()
+            
+            val cache = getStateCache(context, "history")
+            cache[mediaId] = CachedState(jsonStr.hashCode(), entry.lastUpdated)
+            saveStateCache(context, "history", cache)
 
             Log.d(TAG, "Wrote watch state for $mediaId: state=${entry.watchState}")
         } catch (e: Exception) {
@@ -317,6 +384,10 @@ object LocalDataManager {
 
             val prefs = context.getSharedPrefs()
             prefs.edit().putString(key, json).apply()
+            
+            val cache = getStateCache(context, "resume")
+            cache[mediaId] = CachedState(json.hashCode(), entry.lastUpdated)
+            saveStateCache(context, "resume", cache)
 
             Log.d(TAG, "Wrote resume watching for $mediaId: ${entry.name}")
         } catch (e: Exception) {
