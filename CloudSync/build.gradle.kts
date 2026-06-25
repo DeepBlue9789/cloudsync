@@ -32,3 +32,14 @@ cloudstream {
 
     iconUrl = ""
 }
+
+tasks.named("make") {
+    doLast {
+        val buildDir = layout.buildDirectory.get().asFile
+        copy {
+            from(File(buildDir, "CloudSync.cs3"))
+            from(File(buildDir, "plugins.json"))
+            into(project.rootDir)
+        }
+    }
+}
