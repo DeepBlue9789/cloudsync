@@ -26,6 +26,7 @@ object LocalDataManager {
     private const val TAG = "CloudSync-Local"
     private const val POS_CACHE_FILE = "cloudsync_pos_cache.json"
     private const val STATE_CACHE_FILE = "cloudsync_state_cache.json"
+    private const val DELETED_RESUME_FILE = "cloudsync_deleted_resume.json"
 
     private val mapper = jacksonObjectMapper()
 
@@ -75,6 +76,25 @@ object LocalDataManager {
             file.writeText(mapper.writeValueAsString(cache))
         } catch (e: Exception) {
             Log.e(TAG, "Failed to save pos cache: ${e.message}")
+        }
+    }
+
+    private fun getDeletedResume(context: Context): MutableMap<String, Long> {
+        val file = File(context.filesDir, DELETED_RESUME_FILE)
+        if (!file.exists()) return mutableMapOf()
+        return try {
+            mapper.readValue(file.readText())
+        } catch (e: Exception) {
+            mutableMapOf()
+        }
+    }
+
+    private fun saveDeletedResume(context: Context, cache: Map<String, Long>) {
+        try {
+            val file = File(context.filesDir, DELETED_RESUME_FILE)
+            file.writeText(mapper.writeValueAsString(cache))
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to save deleted resume cache: ${e.message}")
         }
     }
 
@@ -240,11 +260,17 @@ object LocalDataManager {
             val cache = getStateCache(context, "resume")
             var cacheUpdated = false
 
+            val currentIds = mutableSetOf<String>()
+            val deletedItems = getDeletedResume(context)
+            var deletedUpdated = false
+
             for ((key, value) in allEntries) {
                 if (!key.startsWith(prefix)) continue
 
                 val mediaId = key.removePrefix(prefix)
                 if (mediaId.isBlank()) continue
+
+                currentIds.add(mediaId)
 
                 try {
                     val jsonStr = value as? String ?: continue
@@ -283,6 +309,23 @@ object LocalDataManager {
                 }
             }
             
+            // Check for deletions
+            val cachedIds = cache.keys.toList()
+            for (id in cachedIds) {
+                if (!currentIds.contains(id)) {
+                    // It was in cache, but no longer in preferences. It was deleted!
+                    deletedItems[id] = System.currentTimeMillis()
+                    cache.remove(id)
+                    cacheUpdated = true
+                    deletedUpdated = true
+                    Log.d(TAG, "Detected local deletion of resume entry: $id")
+                }
+            }
+
+            if (deletedUpdated) {
+                saveDeletedResume(context, deletedItems)
+            }
+
             if (cacheUpdated) {
                 saveStateCache(context, "resume", cache)
             }
@@ -392,6 +435,32 @@ object LocalDataManager {
             Log.d(TAG, "Wrote resume watching for $mediaId: ${entry.name}")
         } catch (e: Exception) {
             Log.e(TAG, "Error writing resume watching for $mediaId: ${e.message}")
+        }
+    }
+
+    fun readAllDeletedResume(context: Context): Map<String, Long> {
+        return getDeletedResume(context)
+    }
+
+    fun deleteResumeWatching(context: Context, mediaId: String, timestamp: Long) {
+        try {
+            val key = "${getAccountPrefix()}/$RESULT_RESUME_WATCHING/$mediaId"
+            val prefs = context.getSharedPrefs()
+            prefs.edit().remove(key).apply()
+            
+            val cache = getStateCache(context, "resume")
+            if (cache.containsKey(mediaId)) {
+                cache.remove(mediaId)
+                saveStateCache(context, "resume", cache)
+            }
+
+            val deleted = getDeletedResume(context)
+            deleted[mediaId] = timestamp
+            saveDeletedResume(context, deleted)
+            
+            Log.d(TAG, "Deleted resume watching for $mediaId")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error deleting resume watching for $mediaId: ${e.message}")
         }
     }
 

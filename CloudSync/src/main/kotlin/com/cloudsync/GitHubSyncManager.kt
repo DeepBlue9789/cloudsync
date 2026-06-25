@@ -37,6 +37,7 @@ object GitHubSyncManager {
         val localPositions = LocalDataManager.readAllPlaybackPositions(context)
         val localHistory = LocalDataManager.readAllWatchHistory(context)
         val localResume = LocalDataManager.readAllResumeWatching(context)
+        val localDeletedResume = LocalDataManager.readAllDeletedResume(context)
         val localPrefs = LocalDataManager.readAllPreferences(context)
 
         val localPayload = SyncPayload(
@@ -47,6 +48,7 @@ object GitHubSyncManager {
             watchHistory = localHistory,
             playbackPositions = localPositions,
             resumeWatching = localResume,
+            deletedResumeWatching = localDeletedResume,
             preferences = localPrefs
         )
 
@@ -112,6 +114,7 @@ object GitHubSyncManager {
         val localPositions = LocalDataManager.readAllPlaybackPositions(context)
         val localHistory = LocalDataManager.readAllWatchHistory(context)
         val localResume = LocalDataManager.readAllResumeWatching(context)
+        val localDeletedResume = LocalDataManager.readAllDeletedResume(context)
         val localPrefs = LocalDataManager.readAllPreferences(context)
 
         // Fetch remote and merge to avoid losing other device's data
@@ -124,6 +127,7 @@ object GitHubSyncManager {
             watchHistory = localHistory,
             playbackPositions = localPositions,
             resumeWatching = localResume,
+            deletedResumeWatching = localDeletedResume,
             preferences = localPrefs
         )
 
@@ -161,11 +165,13 @@ object GitHubSyncManager {
         val localPositions = LocalDataManager.readAllPlaybackPositions(context)
         val localHistory = LocalDataManager.readAllWatchHistory(context)
         val localResume = LocalDataManager.readAllResumeWatching(context)
+        val localDeletedResume = LocalDataManager.readAllDeletedResume(context)
         val localPrefs = LocalDataManager.readAllPreferences(context)
         val localPayload = SyncPayload(
             watchHistory = localHistory,
             playbackPositions = localPositions,
             resumeWatching = localResume,
+            deletedResumeWatching = localDeletedResume,
             preferences = localPrefs
         )
 
@@ -243,6 +249,23 @@ object GitHubSyncManager {
             if (localItem.lastUpdated >= remoteItem.lastUpdated) localItem else remoteItem
         }
 
+        val mergedDeletedResume = mergeByTimestamp(
+            local.deletedResumeWatching,
+            remote.deletedResumeWatching
+        ) { l, r -> if (l >= r) l else r }
+
+        // Filter out mergedResume items that were deleted later
+        val finalResume = mergedResume.filterKeys { id ->
+            val deletedTime = mergedDeletedResume[id]
+            if (deletedTime != null) {
+                val item = mergedResume[id]
+                if (item != null && deletedTime >= item.lastUpdated) {
+                    return@filterKeys false
+                }
+            }
+            true
+        }
+
         return SyncPayload(
             version = 1,
             lastSync = System.currentTimeMillis(),
@@ -250,7 +273,8 @@ object GitHubSyncManager {
             deviceName = local.deviceName.ifBlank { remote.deviceName },
             watchHistory = mergedHistory,
             playbackPositions = mergedPositions,
-            resumeWatching = mergedResume,
+            resumeWatching = finalResume,
+            deletedResumeWatching = mergedDeletedResume,
             preferences = mergedPrefs
         )
     }
@@ -332,6 +356,21 @@ object GitHubSyncManager {
                     LocalDataManager.writeEpisodeState(context, mediaId, mergedEntry.episode, mergedEntry.season)
                 }
                 count++
+            }
+        }
+
+        // Delete items that were deleted remotely
+        for ((mediaId, deletedTime) in mergedPayload.deletedResumeWatching) {
+            val localDeletedTime = localPayload.deletedResumeWatching[mediaId]
+            // If the deletion is new to us (we didn't know about it, or our deletion is older)
+            if (localDeletedTime == null || deletedTime > localDeletedTime) {
+                val localEntry = localPayload.resumeWatching[mediaId]
+                // If we have a local entry, delete it if the remote deletion is newer
+                // If we don't have a local entry, we should still register the deletion locally
+                if (localEntry == null || deletedTime >= localEntry.lastUpdated) {
+                    LocalDataManager.deleteResumeWatching(context, mediaId, deletedTime)
+                    count++
+                }
             }
         }
 

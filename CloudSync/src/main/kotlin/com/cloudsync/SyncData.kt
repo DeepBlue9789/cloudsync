@@ -15,6 +15,7 @@ data class SyncPayload(
     @JsonProperty("watchHistory") val watchHistory: Map<String, WatchEntry> = emptyMap(),
     @JsonProperty("playbackPositions") val playbackPositions: Map<String, PlaybackPosition> = emptyMap(),
     @JsonProperty("resumeWatching") val resumeWatching: Map<String, ResumeEntry> = emptyMap(),
+    @JsonProperty("deletedResumeWatching") val deletedResumeWatching: Map<String, Long> = emptyMap(),
     @JsonProperty("preferences") val preferences: Map<String, PrefEntry> = emptyMap()
 )
 

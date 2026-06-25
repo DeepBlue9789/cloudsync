@@ -28,6 +28,9 @@ class CloudSyncPlugin : Plugin() {
     @Volatile
     private var isSyncing = false
 
+    @Volatile
+    private var syncQueued = false
+
     companion object {
         private const val TAG = "CloudSync"
         private const val SYNC_DEBOUNCE_MS = 2_000L // 2s debounce for auto-sync (reduced from 5s for faster backgrounding)
@@ -123,7 +126,6 @@ class CloudSyncPlugin : Plugin() {
 
             prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
                 if (key == null) return@OnSharedPreferenceChangeListener
-                if (isSyncing) return@OnSharedPreferenceChangeListener
 
                 // Only trigger on playback-related changes
                 if (key.contains("video_pos_dur") ||
@@ -148,26 +150,44 @@ class CloudSyncPlugin : Plugin() {
      * Schedule a debounced sync to batch rapid changes.
      */
     private fun scheduleDebouncedSync(context: Context) {
+        if (isSyncing) {
+            syncQueued = true
+            return
+        }
+
         syncJob?.cancel()
         syncJob = pluginScope.launch {
             delay(SYNC_DEBOUNCE_MS)
-            if (isSyncing) return@launch
 
-            isSyncing = true
-            try {
-                val creds = getCredentials()
-                if (!creds.isConfigured()) return@launch
+            var keepGoing = false
+            do {
+                isSyncing = true
+                syncQueued = false
+                try {
+                    val creds = getCredentials()
+                    if (!creds.isConfigured()) {
+                        syncQueued = false
+                        return@launch
+                    }
 
-                val ctx = CloudStreamApp.context ?: context
-                Log.d(TAG, "Debounced auto-sync triggered")
-                val result = GitHubSyncManager.fullSync(ctx, creds)
-                saveLastSyncResult(result)
-                Log.d(TAG, "Auto-sync result: ${result.message}")
-            } catch (e: Exception) {
-                Log.e(TAG, "Auto-sync error: ${e.message}")
-            } finally {
-                isSyncing = false
-            }
+                    val ctx = CloudStreamApp.context ?: context
+                    Log.d(TAG, "Debounced auto-sync triggered")
+                    val result = GitHubSyncManager.fullSync(ctx, creds)
+                    saveLastSyncResult(result)
+                    Log.d(TAG, "Auto-sync result: ${result.message}")
+                } catch (e: Exception) {
+                    if (e is CancellationException) {
+                        syncQueued = false
+                        throw e
+                    }
+                    Log.e(TAG, "Auto-sync error: ${e.message}")
+                } finally {
+                    keepGoing = syncQueued
+                    if (!keepGoing) {
+                        isSyncing = false
+                    }
+                }
+            } while (keepGoing)
         }
     }
 
