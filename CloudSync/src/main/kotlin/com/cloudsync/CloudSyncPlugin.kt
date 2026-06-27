@@ -45,12 +45,12 @@ class CloudSyncPlugin : Plugin() {
     @Volatile
     private var lastSyncTimestamp = 0L
 
-    /** Minimum interval between syncs in ms. Starts at 30s, increases on rate limit */
+    /** Minimum interval between syncs in ms. Starts at 15s, increases on rate limit */
     @Volatile
-    private var syncMinIntervalMs = 30_000L
+    private var syncMinIntervalMs = 15_000L
 
     /** Default minimum interval (reset target after successful sync) */
-    private val DEFAULT_MIN_INTERVAL_MS = 30_000L
+    private val DEFAULT_MIN_INTERVAL_MS = 15_000L
 
     /** Maximum backoff interval (5 minutes) */
     private val MAX_BACKOFF_INTERVAL_MS = 300_000L
@@ -247,7 +247,7 @@ class CloudSyncPlugin : Plugin() {
                             // If we get here, position hasn't updated for 2s → player paused
                             isPlaybackActive = false
                             Log.d(TAG, "[Trigger 1] Player pause detected (position silence)")
-                            requestSync(context, "player_pause")
+                            requestSync(context, "player_pause", force = true)
                         }
                     }
 
@@ -258,7 +258,7 @@ class CloudSyncPlugin : Plugin() {
                             lastKnownEpisodeKey = newKey
                             isDirty = true
                             Log.d(TAG, "[Trigger 5] Episode/season changed: $key")
-                            requestSync(context, "episode_change")
+                            requestSync(context, "episode_change", force = true)
                         }
                     }
 
@@ -312,7 +312,7 @@ class CloudSyncPlugin : Plugin() {
                     if (activityName.contains("player")) {
                         isDirty = true  // Player always has unsaved progress
                         Log.d(TAG, "[Trigger 2] Player activity stopped: ${activity.javaClass.simpleName}")
-                        requestSync(activity.applicationContext, "player_close")
+                        requestSync(activity.applicationContext, "player_close", force = true)
                     }
 
                     // Trigger 3: App going to background
@@ -321,7 +321,7 @@ class CloudSyncPlugin : Plugin() {
                         startedActivityCount = 0
                         if (isDirty) {
                             Log.d(TAG, "[Trigger 3] App going to background with dirty data")
-                            requestSync(activity.applicationContext, "app_background")
+                            requestSync(activity.applicationContext, "app_background", force = true)
                         }
                     }
                 }
@@ -332,7 +332,7 @@ class CloudSyncPlugin : Plugin() {
                     val activityName = activity.javaClass.simpleName.lowercase()
                     if (activityName.contains("player") && isDirty) {
                         Log.d(TAG, "[Trigger 3] Player activity paused with dirty data")
-                        requestSync(activity.applicationContext, "app_pause")
+                        requestSync(activity.applicationContext, "app_pause", force = true)
                     }
                 }
 
@@ -405,13 +405,15 @@ class CloudSyncPlugin : Plugin() {
      * @param context Android context
      * @param trigger Name of the trigger for logging
      */
-    private fun requestSync(context: Context, trigger: String) {
+    private fun requestSync(context: Context, trigger: String, force: Boolean = false) {
         // Check minimum interval
-        val elapsed = System.currentTimeMillis() - lastSyncTimestamp
-        if (elapsed < syncMinIntervalMs) {
-            Log.d(TAG, "Sync request ($trigger) throttled: ${elapsed/1000}s < ${syncMinIntervalMs/1000}s minimum")
-            // Don't clear dirty flag — it will be picked up on next opportunity
-            return
+        if (!force) {
+            val elapsed = System.currentTimeMillis() - lastSyncTimestamp
+            if (elapsed < syncMinIntervalMs) {
+                Log.d(TAG, "Sync request ($trigger) throttled: ${elapsed/1000}s < ${syncMinIntervalMs/1000}s minimum")
+                // Don't clear dirty flag — it will be picked up on next opportunity
+                return
+            }
         }
 
         // If already syncing, queue one follow-up
