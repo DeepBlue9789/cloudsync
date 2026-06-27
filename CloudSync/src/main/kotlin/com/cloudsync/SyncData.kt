@@ -79,11 +79,23 @@ data class ResumeEntry(
 )
 
 /**
- * GitHub Gist credentials stored locally.
+ * Credentials stored locally.
  */
 data class SyncCredentials(
+    @JsonProperty("syncMethod") val syncMethod: String = "github", // "github" or "pocketbase"
+    
+    // GitHub fields
     @JsonProperty("token") val token: String = "",
     @JsonProperty("gistId") val gistId: String = "",
+    
+    // PocketBase fields
+    @JsonProperty("pbUrl") val pbUrl: String = "",
+    @JsonProperty("pbEmail") val pbEmail: String = "",
+    @JsonProperty("pbPassword") val pbPassword: String = "",
+    @JsonProperty("pbCollection") val pbCollection: String = "cloudsync",
+    @JsonProperty("pbRecordId") val pbRecordId: String = "",
+
+    // Common fields
     @JsonProperty("deviceId") val deviceId: String = "",
     @JsonProperty("deviceName") val deviceName: String = "Device",
     @JsonProperty("autoSync") val autoSync: Boolean = true,
@@ -91,8 +103,16 @@ data class SyncCredentials(
     @JsonProperty("syncOnPlaybackEnd") val syncOnPlaybackEnd: Boolean = true,
     @JsonProperty("showSyncToasts") val showSyncToasts: Boolean = false
 ) {
-    fun isConfigured(): Boolean = token.isNotBlank()
+    fun isConfigured(): Boolean {
+        return if (syncMethod == "pocketbase") {
+            pbUrl.isNotBlank() && pbEmail.isNotBlank() && pbPassword.isNotBlank()
+        } else {
+            token.isNotBlank()
+        }
+    }
+    
     fun hasGist(): Boolean = gistId.isNotBlank()
+    fun hasPbRecord(): Boolean = pbRecordId.isNotBlank()
 }
 
 /**

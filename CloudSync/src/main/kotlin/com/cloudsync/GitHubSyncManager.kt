@@ -316,7 +316,7 @@ object GitHubSyncManager {
      * IMPORTANT: Deletions are processed BEFORE resume writes to prevent
      * writing back items that were deleted on another device.
      */
-    private fun writeRemoteDataToLocal(
+    internal fun writeRemoteDataToLocal(
         context: Context,
         localPayload: SyncPayload,
         mergedPayload: SyncPayload

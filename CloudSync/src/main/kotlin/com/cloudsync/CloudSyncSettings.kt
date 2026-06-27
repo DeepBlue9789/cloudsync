@@ -27,79 +27,103 @@ object CloudSyncSettings {
     private val settingsScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     /**
-     * Perform initial setup: validate token, find/create gist, and do first sync.
+     * Perform initial setup: validate credentials, find/create remote record, and do first sync.
      */
     fun setupAndSync(
         context: Context,
-        token: String,
-        deviceName: String,
+        creds: SyncCredentials,
         onResult: (SyncResult) -> Unit
     ) {
         settingsScope.launch {
             try {
-                // Step 1: Validate token
-                withContext(Dispatchers.Main) {
-                    showToast("Validating GitHub token...")
-                }
-
-                val isValid = GitHubApiClient.validateToken(token)
-                if (!isValid) {
-                    val result = SyncResult(false, "Invalid GitHub token. Make sure it has 'gist' scope.")
-                    withContext(Dispatchers.Main) { onResult(result) }
-                    return@launch
-                }
-
-                // Step 2: Find or create gist
-                withContext(Dispatchers.Main) {
-                    showToast("Finding sync gist...")
-                }
-
-                var gistId = GitHubApiClient.findExistingGist(token)
-                if (gistId == null) {
-                    withContext(Dispatchers.Main) {
-                        showToast("Creating new sync gist...")
+                if (creds.syncMethod == "pocketbase") {
+                    withContext(Dispatchers.Main) { showToast("Validating PocketBase credentials...") }
+                    
+                    val token = PocketBaseApiClient.authenticate(creds)
+                    if (token == null) {
+                        val result = SyncResult(false, "Invalid PocketBase credentials.")
+                        withContext(Dispatchers.Main) { onResult(result) }
+                        return@launch
                     }
 
-                    val deviceId = GitHubSyncManager.generateDeviceId()
-                    val initialPayload = SyncPayload(
-                        version = 1,
-                        lastSync = System.currentTimeMillis(),
-                        deviceId = deviceId,
-                        deviceName = deviceName
+                    withContext(Dispatchers.Main) { showToast("Finding sync record...") }
+                    var recordId = PocketBaseApiClient.findExistingRecord(creds, token)
+                    if (recordId == null) {
+                        withContext(Dispatchers.Main) { showToast("Creating new sync record...") }
+                        val deviceId = CloudSyncPlugin.getCredentials().deviceId.ifBlank {
+                            GitHubSyncManager.generateDeviceId()
+                        }
+                        val initialPayload = SyncPayload(
+                            version = 1,
+                            lastSync = System.currentTimeMillis(),
+                            deviceId = deviceId,
+                            deviceName = creds.deviceName
+                        )
+                        recordId = PocketBaseApiClient.createRecord(creds, token, initialPayload)
+                    }
+
+                    if (recordId == null) {
+                        val result = SyncResult(false, "Failed to create/find sync record.")
+                        withContext(Dispatchers.Main) { onResult(result) }
+                        return@launch
+                    }
+
+                    val newCreds = creds.copy(
+                        pbRecordId = recordId,
+                        deviceId = CloudSyncPlugin.getCredentials().deviceId.ifBlank { GitHubSyncManager.generateDeviceId() },
+                        autoSync = true,
+                        syncOnOpen = true,
+                        syncOnPlaybackEnd = true
                     )
-                    gistId = GitHubApiClient.createGist(token, initialPayload)
-                }
+                    CloudSyncPlugin.saveCredentials(newCreds)
 
-                if (gistId == null) {
-                    val result = SyncResult(false, "Failed to create/find sync gist. Check your token permissions.")
-                    withContext(Dispatchers.Main) { onResult(result) }
-                    return@launch
-                }
+                    withContext(Dispatchers.Main) { showToast("Performing first sync...") }
+                    val syncResult = PocketBaseSyncManager.fullSync(context, newCreds)
+                    CloudSyncPlugin.saveLastSyncResult(syncResult)
+                    withContext(Dispatchers.Main) { onResult(syncResult) }
 
-                // Step 3: Save credentials
-                val creds = SyncCredentials(
-                    token = token,
-                    gistId = gistId,
-                    deviceId = CloudSyncPlugin.getCredentials().deviceId.ifBlank {
-                        GitHubSyncManager.generateDeviceId()
-                    },
-                    deviceName = deviceName.ifBlank { "Device" },
-                    autoSync = true,
-                    syncOnOpen = true,
-                    syncOnPlaybackEnd = true
-                )
-                CloudSyncPlugin.saveCredentials(creds)
+                } else {
+                    withContext(Dispatchers.Main) { showToast("Validating GitHub token...") }
+                    val isValid = GitHubApiClient.validateToken(creds.token)
+                    if (!isValid) {
+                        val result = SyncResult(false, "Invalid GitHub token. Make sure it has 'gist' scope.")
+                        withContext(Dispatchers.Main) { onResult(result) }
+                        return@launch
+                    }
 
-                // Step 4: Perform first sync
-                withContext(Dispatchers.Main) {
-                    showToast("Performing first sync...")
-                }
+                    withContext(Dispatchers.Main) { showToast("Finding sync gist...") }
+                    var gistId = GitHubApiClient.findExistingGist(creds.token)
+                    if (gistId == null) {
+                        withContext(Dispatchers.Main) { showToast("Creating new sync gist...") }
+                        val deviceId = GitHubSyncManager.generateDeviceId()
+                        val initialPayload = SyncPayload(
+                            version = 1,
+                            lastSync = System.currentTimeMillis(),
+                            deviceId = deviceId,
+                            deviceName = creds.deviceName
+                        )
+                        gistId = GitHubApiClient.createGist(creds.token, initialPayload)
+                    }
 
-                val syncResult = GitHubSyncManager.fullSync(context, creds)
-                CloudSyncPlugin.saveLastSyncResult(syncResult)
+                    if (gistId == null) {
+                        val result = SyncResult(false, "Failed to create/find sync gist.")
+                        withContext(Dispatchers.Main) { onResult(result) }
+                        return@launch
+                    }
 
-                withContext(Dispatchers.Main) {
-                    onResult(syncResult)
+                    val newCreds = creds.copy(
+                        gistId = gistId,
+                        deviceId = CloudSyncPlugin.getCredentials().deviceId.ifBlank { GitHubSyncManager.generateDeviceId() },
+                        autoSync = true,
+                        syncOnOpen = true,
+                        syncOnPlaybackEnd = true
+                    )
+                    CloudSyncPlugin.saveCredentials(newCreds)
+
+                    withContext(Dispatchers.Main) { showToast("Performing first sync...") }
+                    val syncResult = GitHubSyncManager.fullSync(context, newCreds)
+                    CloudSyncPlugin.saveLastSyncResult(syncResult)
+                    withContext(Dispatchers.Main) { onResult(syncResult) }
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Setup error: ${e.message}")
@@ -117,7 +141,7 @@ object CloudSyncSettings {
             try {
                 val creds = CloudSyncPlugin.getCredentials()
                 if (!creds.isConfigured()) {
-                    val result = SyncResult(false, "Not configured. Enter your GitHub token first.")
+                    val result = SyncResult(false, "Not configured. Set up credentials first.")
                     withContext(Dispatchers.Main) { onResult(result) }
                     return@launch
                 }
@@ -126,7 +150,12 @@ object CloudSyncSettings {
                     showToast("☁️ Syncing...")
                 }
 
-                val result = GitHubSyncManager.fullSync(context, creds)
+                val result = if (creds.syncMethod == "pocketbase") {
+                    PocketBaseSyncManager.fullSync(context, creds)
+                } else {
+                    GitHubSyncManager.fullSync(context, creds)
+                }
+                
                 CloudSyncPlugin.saveLastSyncResult(result)
 
                 withContext(Dispatchers.Main) {
@@ -158,15 +187,18 @@ object CloudSyncSettings {
             try {
                 val creds = CloudSyncPlugin.getCredentials()
                 if (!creds.isConfigured()) {
-                    withContext(Dispatchers.Main) {
-                        onResult(SyncResult(false, "Not configured"))
-                    }
+                    withContext(Dispatchers.Main) { onResult(SyncResult(false, "Not configured")) }
                     return@launch
                 }
 
                 withContext(Dispatchers.Main) { showToast("📥 Pulling from cloud...") }
 
-                val result = GitHubSyncManager.pullOnly(context, creds)
+                val result = if (creds.syncMethod == "pocketbase") {
+                    PocketBaseSyncManager.pullOnly(context, creds)
+                } else {
+                    GitHubSyncManager.pullOnly(context, creds)
+                }
+                
                 CloudSyncPlugin.saveLastSyncResult(result)
 
                 withContext(Dispatchers.Main) {
@@ -192,15 +224,18 @@ object CloudSyncSettings {
             try {
                 val creds = CloudSyncPlugin.getCredentials()
                 if (!creds.isConfigured()) {
-                    withContext(Dispatchers.Main) {
-                        onResult(SyncResult(false, "Not configured"))
-                    }
+                    withContext(Dispatchers.Main) { onResult(SyncResult(false, "Not configured")) }
                     return@launch
                 }
 
                 withContext(Dispatchers.Main) { showToast("📤 Pushing to cloud...") }
 
-                val result = GitHubSyncManager.pushOnly(context, creds)
+                val result = if (creds.syncMethod == "pocketbase") {
+                    PocketBaseSyncManager.pushOnly(context, creds)
+                } else {
+                    GitHubSyncManager.pushOnly(context, creds)
+                }
+                
                 CloudSyncPlugin.saveLastSyncResult(result)
 
                 withContext(Dispatchers.Main) {
@@ -242,7 +277,7 @@ object CloudSyncSettings {
     fun resetSync(context: Context) {
         val creds = CloudSyncPlugin.getCredentials()
 
-        // Optionally delete the gist
+        // Optionally delete the gist/record if desired (omitted for safety, or implement per backend)
         if (creds.isConfigured() && creds.hasGist()) {
             settingsScope.launch {
                 try {
@@ -260,13 +295,12 @@ object CloudSyncSettings {
 
     /**
      * Export current credentials as a compact Base64 string for easy transfer to another device.
-     * Format: Base64(JSON with token, gistId, deviceName)
      */
     fun exportConfigString(): String? {
         val creds = CloudSyncPlugin.getCredentials()
         if (!creds.isConfigured()) return null
         return try {
-            val json = """{"token":"${creds.token}","gistId":"${creds.gistId}","deviceName":"${creds.deviceName}"}"""
+            val json = com.fasterxml.jackson.module.kotlin.jacksonObjectMapper().writeValueAsString(creds)
             Base64.encodeToString(json.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
         } catch (e: Exception) {
             Log.e(TAG, "Export failed: ${e.message}")
@@ -276,7 +310,6 @@ object CloudSyncSettings {
 
     /**
      * Import credentials from an exported Base64 string.
-     * Validates the token before saving.
      */
     fun importConfigString(
         context: Context,
@@ -286,55 +319,27 @@ object CloudSyncSettings {
         settingsScope.launch {
             try {
                 val json = String(Base64.decode(encoded.trim(), Base64.NO_WRAP), Charsets.UTF_8)
-                // Simple JSON field extraction (avoids extra dependencies)
-                val configMap = try {
-                    com.fasterxml.jackson.module.kotlin.jacksonObjectMapper()
-                        .readValue(json, Map::class.java) as Map<*, *>
-                } catch (e: Exception) {
-                    withContext(Dispatchers.Main) {
-                        onResult(SyncResult(false, "Invalid config string format"))
-                    }
-                    return@launch
-                }
-                val token = configMap["token"] as? String ?: ""
-                val gistId = configMap["gistId"] as? String ?: ""
-                val deviceName = configMap["deviceName"] as? String ?: "Device"
+                val newCreds = com.fasterxml.jackson.module.kotlin.jacksonObjectMapper()
+                    .readValue(json, SyncCredentials::class.java)
 
-                if (token.isBlank()) {
-                    withContext(Dispatchers.Main) {
-                        onResult(SyncResult(false, "Invalid config string — token missing"))
-                    }
+                if (!newCreds.isConfigured()) {
+                    withContext(Dispatchers.Main) { onResult(SyncResult(false, "Invalid config string")) }
                     return@launch
                 }
 
-                withContext(Dispatchers.Main) { showToast("Validating token...") }
-
-                val isValid = GitHubApiClient.validateToken(token)
-                if (!isValid) {
-                    withContext(Dispatchers.Main) {
-                        onResult(SyncResult(false, "Token in config string is invalid or expired"))
-                    }
-                    return@launch
-                }
-
-                val deviceId = CloudSyncPlugin.getCredentials().deviceId.ifBlank {
-                    GitHubSyncManager.generateDeviceId()
-                }
-                // Use a fresh device name for this device (keep original as fallback)
-                val newCreds = SyncCredentials(
-                    token = token,
-                    gistId = gistId,
-                    deviceId = deviceId,
-                    deviceName = deviceName,
-                    autoSync = true,
-                    syncOnOpen = true,
-                    syncOnPlaybackEnd = true
+                val finalCreds = newCreds.copy(
+                    deviceId = CloudSyncPlugin.getCredentials().deviceId.ifBlank { GitHubSyncManager.generateDeviceId() }
                 )
-                CloudSyncPlugin.saveCredentials(newCreds)
+                CloudSyncPlugin.saveCredentials(finalCreds)
 
                 withContext(Dispatchers.Main) { showToast("Credentials imported! Syncing...") }
 
-                val syncResult = GitHubSyncManager.fullSync(context, newCreds)
+                val syncResult = if (finalCreds.syncMethod == "pocketbase") {
+                    PocketBaseSyncManager.fullSync(context, finalCreds)
+                } else {
+                    GitHubSyncManager.fullSync(context, finalCreds)
+                }
+                
                 CloudSyncPlugin.saveLastSyncResult(syncResult)
 
                 withContext(Dispatchers.Main) {
@@ -357,11 +362,7 @@ object CloudSyncSettings {
      */
     fun showSettingsDialog(context: Context) {
         val builder = AlertDialog.Builder(context)
-        
-        // Root scroll view for scrollability
         val scrollView = ScrollView(context)
-        
-        // Container layout
         val layout = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
             val padding = dp(context, 16)
@@ -392,7 +393,7 @@ object CloudSyncSettings {
                     diff < 86_400_000 -> "${diff / 3_600_000}h ago"
                     else -> "${diff / 86_400_000}d ago"
                 }
-                "Last Sync: $timeAgo\nResult: $lastMsg"
+                "Last Sync: $timeAgo\nResult: $lastMsg\nMethod: ${creds.syncMethod.uppercase()}"
             } else {
                 "Last Sync: Never\nStatus: Unconfigured"
             }
@@ -405,18 +406,6 @@ object CloudSyncSettings {
         layout.addView(statusView)
         layout.addView(createSpacer(context, 12))
         
-        // Token Input
-        layout.addView(createLabel(context, "GitHub Token (classic, 'gist' scope):"))
-        val tokenInput = EditText(context).apply {
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-            setText(creds.token)
-            hint = "ghp_xxxxxxxxxxxxxxxxxxxxxx"
-            setTextColor(Color.WHITE)
-            setHintTextColor(Color.GRAY)
-        }
-        layout.addView(tokenInput)
-        layout.addView(createSpacer(context, 8))
-        
         // Device Name Input
         layout.addView(createLabel(context, "Device Name (identifies sync source):"))
         val deviceInput = EditText(context).apply {
@@ -427,6 +416,69 @@ object CloudSyncSettings {
             setHintTextColor(Color.GRAY)
         }
         layout.addView(deviceInput)
+        layout.addView(createSpacer(context, 12))
+        
+        // Sync Method Radio Group
+        layout.addView(createLabel(context, "Sync Provider:"))
+        val methodGroup = RadioGroup(context).apply { orientation = RadioGroup.HORIZONTAL }
+        val rbGithub = RadioButton(context).apply { text = "GitHub Gist"; setTextColor(Color.WHITE) }
+        val rbPocketbase = RadioButton(context).apply { text = "PocketBase"; setTextColor(Color.WHITE) }
+        methodGroup.addView(rbGithub)
+        methodGroup.addView(rbPocketbase)
+        if (creds.syncMethod == "pocketbase") rbPocketbase.isChecked = true else rbGithub.isChecked = true
+        layout.addView(methodGroup)
+        
+        // GitHub Container
+        val ghContainer = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+        ghContainer.addView(createLabel(context, "GitHub Token (classic, 'gist' scope):"))
+        val tokenInput = EditText(context).apply {
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+            setText(creds.token)
+            hint = "ghp_xxxxxxxxxxxxxxxxxxxxxx"
+            setTextColor(Color.WHITE)
+            setHintTextColor(Color.GRAY)
+        }
+        ghContainer.addView(tokenInput)
+        
+        // PocketBase Container
+        val pbContainer = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+        pbContainer.addView(createLabel(context, "PocketBase URL:"))
+        val pbUrlInput = EditText(context).apply {
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+            setText(creds.pbUrl)
+            hint = "https://pb.example.com"
+            setTextColor(Color.WHITE)
+            setHintTextColor(Color.GRAY)
+        }
+        pbContainer.addView(pbUrlInput)
+        pbContainer.addView(createLabel(context, "Email:"))
+        val pbEmailInput = EditText(context).apply {
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
+            setText(creds.pbEmail)
+            hint = "user@example.com"
+            setTextColor(Color.WHITE)
+            setHintTextColor(Color.GRAY)
+        }
+        pbContainer.addView(pbEmailInput)
+        pbContainer.addView(createLabel(context, "Password:"))
+        val pbPasswordInput = EditText(context).apply {
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+            setText(creds.pbPassword)
+            hint = "********"
+            setTextColor(Color.WHITE)
+            setHintTextColor(Color.GRAY)
+        }
+        pbContainer.addView(pbPasswordInput)
+
+        layout.addView(ghContainer)
+        layout.addView(pbContainer)
+        
+        fun updateContainers() {
+            ghContainer.visibility = if (rbGithub.isChecked) View.VISIBLE else View.GONE
+            pbContainer.visibility = if (rbPocketbase.isChecked) View.VISIBLE else View.GONE
+        }
+        updateContainers()
+        methodGroup.setOnCheckedChangeListener { _, _ -> updateContainers() }
         layout.addView(createSpacer(context, 12))
         
         // Switches
@@ -470,7 +522,6 @@ object CloudSyncSettings {
         layout.addView(actionLayout)
         layout.addView(createSpacer(context, 8))
         
-        // Push / Pull Buttons
         val forceLayout = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             weightSum = 2f
@@ -499,7 +550,6 @@ object CloudSyncSettings {
         layout.addView(forceLayout)
         layout.addView(createSpacer(context, 12))
 
-        // ── Transfer Setup Section ────────────────────────────────────────────
         val transferLabel = createLabel(context, "📲 Transfer setup to another device:")
         layout.addView(transferLabel)
         layout.addView(createSpacer(context, 4))
@@ -531,7 +581,6 @@ object CloudSyncSettings {
         layout.addView(transferLayout)
         layout.addView(createSpacer(context, 12))
 
-        // Reset Button
         val resetBtn = Button(context).apply {
             text = "Reset Extension Credentials"
             setTextColor(Color.RED)
@@ -548,17 +597,31 @@ object CloudSyncSettings {
         
         // Button Listeners
         saveBtn.setOnClickListener {
-            val token = tokenInput.text.toString().trim()
             val device = deviceInput.text.toString().trim()
-            if (token.isEmpty()) {
-                showToast("Please enter a token")
+            val syncMethod = if (rbPocketbase.isChecked) "pocketbase" else "github"
+            
+            val newCreds = creds.copy(
+                deviceName = device,
+                syncMethod = syncMethod,
+                token = tokenInput.text.toString().trim(),
+                pbUrl = pbUrlInput.text.toString().trim(),
+                pbEmail = pbEmailInput.text.toString().trim(),
+                pbPassword = pbPasswordInput.text.toString().trim()
+            )
+            
+            if (syncMethod == "pocketbase" && (newCreds.pbUrl.isEmpty() || newCreds.pbEmail.isEmpty() || newCreds.pbPassword.isEmpty())) {
+                showToast("Please enter PocketBase URL, Email, and Password")
+                return@setOnClickListener
+            }
+            if (syncMethod == "github" && newCreds.token.isEmpty()) {
+                showToast("Please enter a GitHub token")
                 return@setOnClickListener
             }
             
             saveBtn.isEnabled = false
             saveBtn.text = "Setting up..."
             
-            setupAndSync(context, token, device) { result ->
+            setupAndSync(context, newCreds) { result ->
                 Handler(Looper.getMainLooper()).post {
                     saveBtn.isEnabled = true
                     saveBtn.text = "Setup & Sync"
@@ -632,7 +695,6 @@ object CloudSyncSettings {
                 showToast("Nothing to export — not configured yet")
                 return@setOnClickListener
             }
-            // Show dialog with copyable config string
             val exportEditText = EditText(context).apply {
                 setText(configStr)
                 setTextColor(Color.WHITE)

@@ -177,7 +177,11 @@ class CloudSyncPlugin : Plugin() {
                     delay(2000) // Wait for app to initialize
                     val ctx = CloudStreamApp.context ?: activity ?: return@launch
                     Log.d(TAG, "Auto-sync on app open...")
-                    val result = GitHubSyncManager.fullSync(ctx, creds)
+                    val result = if (creds.syncMethod == "pocketbase") {
+                        PocketBaseSyncManager.fullSync(ctx, creds)
+                    } else {
+                        GitHubSyncManager.fullSync(ctx, creds)
+                    }
                     saveLastSyncResult(result)
                     if (result.success) {
                         if (result.itemsPulled > 0) {
@@ -448,7 +452,11 @@ class CloudSyncPlugin : Plugin() {
                 val ctx = CloudStreamApp.context ?: context
                 Log.d(TAG, "Executing sync (trigger: $trigger)...")
 
-                val (result, backoffSeconds) = GitHubSyncManager.fullSyncWithRateInfo(ctx, creds)
+                val (result, backoffSeconds) = if (creds.syncMethod == "pocketbase") {
+                    PocketBaseSyncManager.fullSyncWithRateInfo(ctx, creds)
+                } else {
+                    GitHubSyncManager.fullSyncWithRateInfo(ctx, creds)
+                }
                 lastSyncTimestamp = System.currentTimeMillis()
                 saveLastSyncResult(result)
 
