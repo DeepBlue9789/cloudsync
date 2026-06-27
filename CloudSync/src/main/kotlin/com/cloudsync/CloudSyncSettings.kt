@@ -222,6 +222,7 @@ object CloudSyncSettings {
         autoSync: Boolean? = null,
         syncOnOpen: Boolean? = null,
         syncOnPlaybackEnd: Boolean? = null,
+        showSyncToasts: Boolean? = null,
         deviceName: String? = null
     ) {
         val current = CloudSyncPlugin.getCredentials()
@@ -229,6 +230,7 @@ object CloudSyncSettings {
             autoSync = autoSync ?: current.autoSync,
             syncOnOpen = syncOnOpen ?: current.syncOnOpen,
             syncOnPlaybackEnd = syncOnPlaybackEnd ?: current.syncOnPlaybackEnd,
+            showSyncToasts = showSyncToasts ?: current.showSyncToasts,
             deviceName = deviceName ?: current.deviceName
         )
         CloudSyncPlugin.saveCredentials(updated)
@@ -436,6 +438,9 @@ object CloudSyncSettings {
         
         val syncOnPlaybackEndSwitch = createSwitch(context, "Sync on Playback Pause/End", creds.syncOnPlaybackEnd)
         layout.addView(syncOnPlaybackEndSwitch)
+        
+        val showSyncToastsSwitch = createSwitch(context, "Show Sync Toasts", creds.showSyncToasts)
+        layout.addView(showSyncToastsSwitch)
         
         layout.addView(createSpacer(context, 16))
         
@@ -721,6 +726,7 @@ object CloudSyncSettings {
                     "Real-time Auto-Sync" -> updatePreferences(autoSync = checked)
                     "Sync on App Open" -> updatePreferences(syncOnOpen = checked)
                     "Sync on Playback Pause/End" -> updatePreferences(syncOnPlaybackEnd = checked)
+                    "Show Sync Toasts" -> updatePreferences(showSyncToasts = checked)
                 }
             }
         }

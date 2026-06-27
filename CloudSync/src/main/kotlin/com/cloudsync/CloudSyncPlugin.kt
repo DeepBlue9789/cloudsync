@@ -33,7 +33,7 @@ class CloudSyncPlugin : Plugin() {
 
     companion object {
         private const val TAG = "CloudSync"
-        private const val SYNC_DEBOUNCE_MS = 2_000L
+        private const val SYNC_THROTTLE_MS = 10_000L // 10 seconds throttle
         internal const val CREDS_KEY = "CLOUDSYNC_CREDENTIALS"
         internal const val LAST_SYNC_KEY = "CLOUDSYNC_LAST_SYNC"
         internal const val LAST_SYNC_RESULT_KEY = "CLOUDSYNC_LAST_RESULT"
@@ -139,15 +139,14 @@ class CloudSyncPlugin : Plugin() {
                     val result = GitHubSyncManager.fullSync(ctx, creds)
                     saveLastSyncResult(result)
                     if (result.success) {
-                        // Trigger UI refresh on the main thread so synced data appears immediately
                         if (result.itemsPulled > 0) {
                             withContext(Dispatchers.Main) {
                                 triggerUIRefresh()
-                                showToast("☁️ Synced: ${result.message}")
+                                if (creds.showSyncToasts) showToast("☁️ Synced: ${result.message}")
                             }
                         } else {
                             withContext(Dispatchers.Main) {
-                                showToast("☁️ Synced: ${result.message}")
+                                if (creds.showSyncToasts) showToast("☁️ Synced: ${result.message}")
                             }
                         }
                     }
@@ -186,7 +185,7 @@ class CloudSyncPlugin : Plugin() {
                     key.contains("result_season")
                 ) {
                     Log.d(TAG, "Detected playback change: $key")
-                    scheduleDebouncedSync(context)
+                    scheduleSync(context)
                 }
             }
 
@@ -198,48 +197,69 @@ class CloudSyncPlugin : Plugin() {
     }
 
     /**
-     * Schedule a debounced sync to batch rapid changes.
+     * Schedule a sync. Uses throttling to ensure sync happens during continuous changes.
      */
-    private fun scheduleDebouncedSync(context: Context) {
+    private fun scheduleSync(context: Context, immediate: Boolean = false) {
+        if (immediate) {
+            syncJob?.cancel()
+            syncJob = pluginScope.launch {
+                executeSync(context)
+            }
+            return
+        }
+
+        // If a sync is already scheduled/waiting, let it run (throttle instead of debounce)
+        if (syncJob?.isActive == true) {
+            return
+        }
+
+        syncJob = pluginScope.launch {
+            delay(SYNC_THROTTLE_MS)
+            executeSync(context)
+        }
+    }
+
+    private suspend fun executeSync(context: Context) {
         if (isSyncing) {
             syncQueued = true
             return
         }
 
-        syncJob?.cancel()
-        syncJob = pluginScope.launch {
-            delay(SYNC_DEBOUNCE_MS)
+        var keepGoing = false
+        do {
+            isSyncing = true
+            syncQueued = false
+            try {
+                val creds = getCredentials()
+                if (!creds.isConfigured()) {
+                    syncQueued = false
+                    return
+                }
 
-            var keepGoing = false
-            do {
-                isSyncing = true
-                syncQueued = false
-                try {
-                    val creds = getCredentials()
-                    if (!creds.isConfigured()) {
-                        syncQueued = false
-                        return@launch
-                    }
-
-                    val ctx = CloudStreamApp.context ?: context
-                    Log.d(TAG, "Debounced auto-sync triggered")
-                    val result = GitHubSyncManager.fullSync(ctx, creds)
-                    saveLastSyncResult(result)
-                    Log.d(TAG, "Auto-sync result: ${result.message}")
-                } catch (e: Exception) {
-                    if (e is CancellationException) {
-                        syncQueued = false
-                        throw e
-                    }
-                    Log.e(TAG, "Auto-sync error: ${e.message}")
-                } finally {
-                    keepGoing = syncQueued
-                    if (!keepGoing) {
-                        isSyncing = false
+                val ctx = CloudStreamApp.context ?: context
+                Log.d(TAG, "Auto-sync triggered")
+                val result = GitHubSyncManager.fullSync(ctx, creds)
+                saveLastSyncResult(result)
+                Log.d(TAG, "Auto-sync result: ${result.message}")
+                
+                if (creds.showSyncToasts) {
+                    withContext(Dispatchers.Main) {
+                        showToast("☁️ Auto-Sync: ${result.message}")
                     }
                 }
-            } while (keepGoing)
-        }
+            } catch (e: Exception) {
+                if (e is CancellationException) {
+                    syncQueued = false
+                    throw e
+                }
+                Log.e(TAG, "Auto-sync error: ${e.message}")
+            } finally {
+                keepGoing = syncQueued
+                if (!keepGoing) {
+                    isSyncing = false
+                }
+            }
+        } while (keepGoing)
     }
 
     /**
@@ -256,8 +276,8 @@ class CloudSyncPlugin : Plugin() {
 
             lifecycleCallbacks = object : android.app.Application.ActivityLifecycleCallbacks {
                 override fun onActivityPaused(activity: android.app.Activity) {
-                    // Trigger sync when user leaves the app
-                    scheduleDebouncedSync(activity)
+                    // Trigger sync immediately when user leaves the app or pauses player
+                    scheduleSync(activity, immediate = true)
                 }
 
                 override fun onActivityCreated(activity: android.app.Activity, savedInstanceState: android.os.Bundle?) {}

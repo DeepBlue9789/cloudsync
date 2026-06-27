@@ -88,7 +88,8 @@ data class SyncCredentials(
     @JsonProperty("deviceName") val deviceName: String = "Device",
     @JsonProperty("autoSync") val autoSync: Boolean = true,
     @JsonProperty("syncOnOpen") val syncOnOpen: Boolean = true,
-    @JsonProperty("syncOnPlaybackEnd") val syncOnPlaybackEnd: Boolean = true
+    @JsonProperty("syncOnPlaybackEnd") val syncOnPlaybackEnd: Boolean = true,
+    @JsonProperty("showSyncToasts") val showSyncToasts: Boolean = false
 ) {
     fun isConfigured(): Boolean = token.isNotBlank()
     fun hasGist(): Boolean = gistId.isNotBlank()
