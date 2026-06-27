@@ -33,7 +33,7 @@ class CloudSyncPlugin : Plugin() {
 
     companion object {
         private const val TAG = "CloudSync"
-        private const val SYNC_DEBOUNCE_MS = 2_000L // 2s debounce for auto-sync (reduced from 5s for faster backgrounding)
+        private const val SYNC_DEBOUNCE_MS = 2_000L
         internal const val CREDS_KEY = "CLOUDSYNC_CREDENTIALS"
         internal const val LAST_SYNC_KEY = "CLOUDSYNC_LAST_SYNC"
         internal const val LAST_SYNC_RESULT_KEY = "CLOUDSYNC_LAST_RESULT"
@@ -70,6 +70,49 @@ class CloudSyncPlugin : Plugin() {
         fun getLastSyncMessage(): String {
             return getKey<String>(LAST_SYNC_RESULT_KEY) ?: "Never synced"
         }
+
+        /**
+         * Trigger CloudStream's UI reload events via reflection so that
+         * freshly synced data (bookmarks, continue watching, etc.) appears
+         * without requiring a manual app restart.
+         *
+         * We use reflection because these are internal MainActivity statics
+         * that aren't exposed in the plugin API.
+         */
+        fun triggerUIRefresh() {
+            try {
+                val mainActivityClass = Class.forName("com.lagradost.cloudstream3.MainActivity")
+
+                // Fire bookmarksUpdatedEvent(true) — refreshes library & bookmarks
+                try {
+                    val bookmarksMethod = mainActivityClass.getMethod("bookmarksUpdatedEvent", Boolean::class.javaPrimitiveType)
+                    bookmarksMethod.invoke(null, true)
+                    Log.d(TAG, "Triggered bookmarksUpdatedEvent")
+                } catch (e: Exception) {
+                    Log.w(TAG, "Could not trigger bookmarksUpdatedEvent: ${e.message}")
+                }
+
+                // Fire reloadHomeEvent(true) — refreshes home page (Continue Watching)
+                try {
+                    val reloadMethod = mainActivityClass.getMethod("reloadHomeEvent", Boolean::class.javaPrimitiveType)
+                    reloadMethod.invoke(null, true)
+                    Log.d(TAG, "Triggered reloadHomeEvent")
+                } catch (e: Exception) {
+                    Log.w(TAG, "Could not trigger reloadHomeEvent: ${e.message}")
+                }
+
+                // Fire reloadLibraryEvent(true) — refreshes library tab
+                try {
+                    val libraryMethod = mainActivityClass.getMethod("reloadLibraryEvent", Boolean::class.javaPrimitiveType)
+                    libraryMethod.invoke(null, true)
+                    Log.d(TAG, "Triggered reloadLibraryEvent")
+                } catch (e: Exception) {
+                    Log.w(TAG, "Could not trigger reloadLibraryEvent: ${e.message}")
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not find MainActivity for UI refresh: ${e.message}")
+            }
+        }
     }
 
     override fun load(context: Context) {
@@ -90,14 +133,22 @@ class CloudSyncPlugin : Plugin() {
         if (creds.isConfigured() && creds.syncOnOpen) {
             pluginScope.launch {
                 try {
-                    delay(3000) // Wait for app to fully initialize
+                    delay(2000) // Wait for app to initialize
                     val ctx = CloudStreamApp.context ?: activity ?: return@launch
                     Log.d(TAG, "Auto-sync on app open...")
                     val result = GitHubSyncManager.fullSync(ctx, creds)
                     saveLastSyncResult(result)
                     if (result.success) {
-                        withContext(Dispatchers.Main) {
-                            showToast("☁️ Synced: ${result.message}")
+                        // Trigger UI refresh on the main thread so synced data appears immediately
+                        if (result.itemsPulled > 0) {
+                            withContext(Dispatchers.Main) {
+                                triggerUIRefresh()
+                                showToast("☁️ Synced: ${result.message}")
+                            }
+                        } else {
+                            withContext(Dispatchers.Main) {
+                                showToast("☁️ Synced: ${result.message}")
+                            }
                         }
                     }
                 } catch (e: Exception) {

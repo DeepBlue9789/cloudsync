@@ -11,10 +11,10 @@ dependencies {
 }
 
 // use an integer for version numbers
-version = 3
+version = 4
 
 cloudstream {
-    description = "Cross-device playback sync via GitHub — syncs exact playback position, watch history, and resume state so half-watched movies and episodes pick up right where you left off on any device."
+    description = "Seamless cross-device sync for CloudStream. Syncs exact playback position (millisecond precision), watch history, continue watching, episode/season progress, and source preferences between all your devices via a private GitHub Gist. Just pause on one device and pick up right where you left off on another — no extra restarts needed."
     authors = listOf("CloudSyncDev")
 
     /**
@@ -24,13 +24,13 @@ cloudstream {
      * 2: Slow
      * 3: Beta only
      * */
-    status = 3
+    status = 1
 
     tvTypes = listOf("Movie", "TvSeries", "Anime", "OVA", "Cartoon")
 
     language = "en"
 
-    iconUrl = ""
+    iconUrl = "https://raw.githubusercontent.com/DeepBlue9789/cloudsync/main/icon.png"
 }
 
 tasks.named("make") {

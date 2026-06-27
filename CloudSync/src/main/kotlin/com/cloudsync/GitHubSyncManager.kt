@@ -93,7 +93,7 @@ object GitHubSyncManager {
 
         return SyncResult(
             success = true,
-            message = "Synced $totalItems items successfully",
+            message = "Synced $totalItems items ($itemsPulled pulled)",
             itemsPushed = totalItems,
             itemsPulled = itemsPulled,
             timestamp = System.currentTimeMillis()
@@ -139,10 +139,11 @@ object GitHubSyncManager {
 
         val success = GitHubApiClient.updateGist(creds.token, gistId, merged)
 
+        val totalItems = merged.playbackPositions.size + merged.watchHistory.size + merged.resumeWatching.size + merged.preferences.size
         return SyncResult(
             success = success,
-            message = if (success) "Pushed ${merged.playbackPositions.size + merged.watchHistory.size + merged.preferences.size} items" else "Push failed",
-            itemsPushed = merged.playbackPositions.size + merged.watchHistory.size + merged.resumeWatching.size + merged.preferences.size
+            message = if (success) "Pushed $totalItems items" else "Push failed",
+            itemsPushed = totalItems
         )
     }
 
@@ -311,6 +312,9 @@ object GitHubSyncManager {
      * Write merged/remote data to local storage.
      * Only writes items that are new or more recent than local.
      * Returns the number of items written.
+     *
+     * IMPORTANT: Deletions are processed BEFORE resume writes to prevent
+     * writing back items that were deleted on another device.
      */
     private fun writeRemoteDataToLocal(
         context: Context,
@@ -346,20 +350,8 @@ object GitHubSyncManager {
             }
         }
 
-        // Write resume watching entries
-        for ((mediaId, mergedEntry) in mergedPayload.resumeWatching) {
-            val localEntry = localPayload.resumeWatching[mediaId]
-            if (localEntry == null || mergedEntry.lastUpdated > localEntry.lastUpdated) {
-                LocalDataManager.writeResumeWatching(context, mediaId, mergedEntry)
-                // Also sync episode/season state for series
-                if (mergedEntry.episode != null || mergedEntry.season != null) {
-                    LocalDataManager.writeEpisodeState(context, mediaId, mergedEntry.episode, mergedEntry.season)
-                }
-                count++
-            }
-        }
-
-        // Delete items that were deleted remotely
+        // --- Process DELETIONS FIRST before writing resume entries ---
+        // This prevents writing back items that were deleted on another device
         for ((mediaId, deletedTime) in mergedPayload.deletedResumeWatching) {
             val localDeletedTime = localPayload.deletedResumeWatching[mediaId]
             // If the deletion is new to us (we didn't know about it, or our deletion is older)
@@ -371,6 +363,27 @@ object GitHubSyncManager {
                     LocalDataManager.deleteResumeWatching(context, mediaId, deletedTime)
                     count++
                 }
+            }
+        }
+
+        // Now write resume watching entries (after deletions have been applied)
+        // Only write entries that survived the deletion filter in the merged payload
+        for ((mediaId, mergedEntry) in mergedPayload.resumeWatching) {
+            // Skip if this item was deleted (it won't be in mergedPayload.resumeWatching
+            // if properly filtered, but double-check against deletedResumeWatching)
+            val deletedTime = mergedPayload.deletedResumeWatching[mediaId]
+            if (deletedTime != null && deletedTime >= mergedEntry.lastUpdated) {
+                continue
+            }
+
+            val localEntry = localPayload.resumeWatching[mediaId]
+            if (localEntry == null || mergedEntry.lastUpdated > localEntry.lastUpdated) {
+                LocalDataManager.writeResumeWatching(context, mediaId, mergedEntry)
+                // Also sync episode/season state for series
+                if (mergedEntry.episode != null || mergedEntry.season != null) {
+                    LocalDataManager.writeEpisodeState(context, mediaId, mergedEntry.episode, mergedEntry.season)
+                }
+                count++
             }
         }
 

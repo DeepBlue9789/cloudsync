@@ -132,6 +132,9 @@ object CloudSyncSettings {
                 withContext(Dispatchers.Main) {
                     onResult(result)
                     if (result.success) {
+                        if (result.itemsPulled > 0) {
+                            CloudSyncPlugin.triggerUIRefresh()
+                        }
                         showToast("☁️ ${result.message}")
                     } else {
                         showToast("❌ ${result.message}")
@@ -168,6 +171,9 @@ object CloudSyncSettings {
 
                 withContext(Dispatchers.Main) {
                     onResult(result)
+                    if (result.success && result.itemsPulled > 0) {
+                        CloudSyncPlugin.triggerUIRefresh()
+                    }
                     showToast(if (result.success) "📥 ${result.message}" else "❌ ${result.message}")
                 }
             } catch (e: Exception) {
@@ -329,7 +335,12 @@ object CloudSyncSettings {
                 val syncResult = GitHubSyncManager.fullSync(context, newCreds)
                 CloudSyncPlugin.saveLastSyncResult(syncResult)
 
-                withContext(Dispatchers.Main) { onResult(syncResult) }
+                withContext(Dispatchers.Main) {
+                    if (syncResult.success && syncResult.itemsPulled > 0) {
+                        CloudSyncPlugin.triggerUIRefresh()
+                    }
+                    onResult(syncResult)
+                }
             } catch (e: Exception) {
                 Log.e(TAG, "Import failed: ${e.message}")
                 withContext(Dispatchers.Main) {

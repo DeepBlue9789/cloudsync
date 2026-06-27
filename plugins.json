@@ -2,8 +2,8 @@
   {
     "name": "CloudSync",
     "internalName": "CloudSync",
-    "description": "Cross-device playback sync via GitHub Gists — exact timestamp, watch history, and resume state.",
-    "version": 2,
+    "description": "Seamless cross-device sync for CloudStream. Syncs exact playback position, watch history, continue watching, episode progress, and source preferences between all your devices via a private GitHub Gist.",
+    "version": 4,
     "url": "https://raw.githubusercontent.com/DeepBlue9789/cloudsync/main/CloudSync.cs3",
     "authors": [
       "CloudSyncDev"
@@ -17,6 +17,7 @@
     ],
     "language": "en",
     "hasSettings": true,
+    "iconUrl": "https://raw.githubusercontent.com/DeepBlue9789/cloudsync/main/icon.png",
     "status": 1
   }
 ]

@@ -338,7 +338,8 @@ object LocalDataManager {
 
     /**
      * Write a playback position back into CloudStream's storage.
-     * This is the key operation for restoring exact playback timestamps on another device.
+     * Uses commit() for synchronous write to ensure data is persisted
+     * before CloudStream's UI reads it.
      */
     fun writePlaybackPosition(context: Context, mediaId: String, position: Long, duration: Long, lastUpdated: Long) {
         try {
@@ -347,7 +348,8 @@ object LocalDataManager {
             val json = mapper.writeValueAsString(posDur)
 
             val prefs = context.getSharedPrefs()
-            prefs.edit().putString(key, json).apply()
+            // Use commit() instead of apply() for synchronous write
+            prefs.edit().putString(key, json).commit()
             
             // Update cache so the local device knows about the pulled timestamp
             val cache = getPosCache(context)
@@ -362,6 +364,7 @@ object LocalDataManager {
 
     /**
      * Write a watch state entry back into CloudStream's storage.
+     * Uses commit() for synchronous write.
      */
     fun writeWatchState(context: Context, mediaId: String, entry: WatchEntry) {
         try {
@@ -385,7 +388,8 @@ object LocalDataManager {
             )
             val jsonStr = mapper.writeValueAsString(data)
             editor.putString(dataKey, jsonStr)
-            editor.apply()
+            // Use commit() for synchronous write
+            editor.commit()
             
             val cache = getStateCache(context, "history")
             cache[mediaId] = CachedState(jsonStr.hashCode(), entry.lastUpdated)
@@ -399,6 +403,7 @@ object LocalDataManager {
 
     /**
      * Write a resume watching entry back into CloudStream's storage.
+     * Uses commit() for synchronous write.
      */
     fun writeResumeWatching(context: Context, mediaId: String, entry: ResumeEntry) {
         try {
@@ -424,7 +429,8 @@ object LocalDataManager {
             }
 
             val prefs = context.getSharedPrefs()
-            prefs.edit().putString(key, json).apply()
+            // Use commit() for synchronous write
+            prefs.edit().putString(key, json).commit()
             
             val cache = getStateCache(context, "resume")
             cache[mediaId] = CachedState(json.hashCode(), entry.lastUpdated)
@@ -440,11 +446,16 @@ object LocalDataManager {
         return getDeletedResume(context)
     }
 
+    /**
+     * Delete a resume watching entry from CloudStream's storage.
+     * Uses commit() for synchronous write.
+     */
     fun deleteResumeWatching(context: Context, mediaId: String, timestamp: Long) {
         try {
             val key = "${getAccountPrefix()}/$RESULT_RESUME_WATCHING/$mediaId"
             val prefs = context.getSharedPrefs()
-            prefs.edit().remove(key).apply()
+            // Use commit() for synchronous write
+            prefs.edit().remove(key).commit()
             
             val cache = getStateCache(context, "resume")
             if (cache.containsKey(mediaId)) {
@@ -464,6 +475,7 @@ object LocalDataManager {
 
     /**
      * Write episode selection state for accurate per-episode resume.
+     * Uses commit() for synchronous write.
      */
     fun writeEpisodeState(context: Context, mediaId: String, episode: Int?, season: Int?) {
         try {
@@ -479,7 +491,8 @@ object LocalDataManager {
                 editor.putInt(seasonKey, season)
             }
 
-            editor.apply()
+            // Use commit() for synchronous write
+            editor.commit()
         } catch (e: Exception) {
             Log.e(TAG, "Error writing episode state for $mediaId: ${e.message}")
         }
@@ -502,6 +515,16 @@ object LocalDataManager {
 
     /**
      * Read relevant profile and source priority preferences from CloudStream.
+     *
+     * CloudStream stores source priorities in keys like:
+     * - "provider_order" or keys containing "priority" (source ordering)
+     * - "extension_" prefixed keys (extension/repo settings)
+     * - Keys containing "source" + "score" (quality scoring)
+     * - Keys containing "profile" (user profile settings)
+     * - Keys containing "preferred_media" (preferred quality/language)
+     * - Keys containing "quality_pref" (quality preferences)
+     * - Keys containing "subtitle_pref" (subtitle preferences)
+     * - Keys containing "provider_" (provider-specific settings)
      */
     fun readAllPreferences(context: Context): Map<String, PrefEntry> {
         val prefs = context.getSharedPrefs()
@@ -511,36 +534,51 @@ object LocalDataManager {
         var cacheUpdated = false
 
         for ((key, value) in allEntries) {
+            // Skip internal CloudSync keys
+            if (key.startsWith("CLOUDSYNC_")) continue
+            // Skip account/playback/watch keys (handled by other sync methods)
+            if (key.contains("/video_pos_dur/") ||
+                key.contains("/result_watch_state") ||
+                key.contains("/result_resume_watching") ||
+                key.contains("/result_episode/") ||
+                key.contains("/result_season/")) continue
+
             // Check if key is related to source priority, extensions, or general profiles
-            if (key.contains("priority", ignoreCase = true) || 
+            val isRelevant = key.contains("priority", ignoreCase = true) ||
                 key.contains("profile", ignoreCase = true) ||
                 (key.contains("source", ignoreCase = true) && key.contains("score", ignoreCase = true)) ||
-                key.startsWith("extension_", ignoreCase = true)
-            ) {
-                
-                val type = when (value) {
-                    is Int -> "Int"
-                    is Boolean -> "Boolean"
-                    is Float -> "Float"
-                    is Long -> "Long"
-                    is String -> "String"
-                    else -> continue
-                }
-                
-                val valueStr = value.toString()
-                val hash = valueStr.hashCode()
-                
-                var updateTime = System.currentTimeMillis()
-                val cached = cache[key]
-                if (cached != null && cached.hash == hash) {
-                    updateTime = cached.timestamp
-                } else {
-                    cacheUpdated = true
-                    cache[key] = CachedState(hash, updateTime)
-                }
-                
-                result[key] = PrefEntry(valueStr, type, updateTime)
+                key.startsWith("extension_", ignoreCase = true) ||
+                key.contains("provider_order", ignoreCase = true) ||
+                key.contains("provider_", ignoreCase = true) ||
+                key.contains("preferred_media", ignoreCase = true) ||
+                key.contains("quality_pref", ignoreCase = true) ||
+                key.contains("subtitle_pref", ignoreCase = true) ||
+                key.contains("lang_pref", ignoreCase = true)
+
+            if (!isRelevant) continue
+
+            val type = when (value) {
+                is Int -> "Int"
+                is Boolean -> "Boolean"
+                is Float -> "Float"
+                is Long -> "Long"
+                is String -> "String"
+                else -> continue
             }
+                
+            val valueStr = value.toString()
+            val hash = valueStr.hashCode()
+                
+            var updateTime = System.currentTimeMillis()
+            val cached = cache[key]
+            if (cached != null && cached.hash == hash) {
+                updateTime = cached.timestamp
+            } else {
+                cacheUpdated = true
+                cache[key] = CachedState(hash, updateTime)
+            }
+                
+            result[key] = PrefEntry(valueStr, type, updateTime)
         }
         
         if (cacheUpdated) {
@@ -553,6 +591,7 @@ object LocalDataManager {
 
     /**
      * Write profile and source priority preferences back to CloudStream's SharedPreferences.
+     * Uses commit() for synchronous write.
      */
     fun writePreferences(context: Context, entries: Map<String, PrefEntry>) {
         val prefs = context.getSharedPrefs()
@@ -581,7 +620,8 @@ object LocalDataManager {
             }
         }
         
-        editor.apply()
+        // Use commit() for synchronous write
+        editor.commit()
         if (cacheUpdated) {
             saveStateCache(context, "prefs", cache)
         }
