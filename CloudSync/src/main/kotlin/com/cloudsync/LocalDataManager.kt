@@ -286,6 +286,15 @@ object LocalDataManager {
                             cache[mediaId] = CachedState(hash, updateTime)
                             cacheUpdated = true
                         }
+                    } else {
+                        // Even if we have updateTime from JSON, we MUST keep it in cache
+                        // so we can detect when it gets deleted from SharedPreferences.
+                        val hash = jsonStr.hashCode()
+                        val cached = cache[mediaId]
+                        if (cached == null || cached.hash != hash) {
+                            cache[mediaId] = CachedState(hash, updateTime)
+                            cacheUpdated = true
+                        }
                     }
 
                     resume[mediaId] = ResumeEntry(
