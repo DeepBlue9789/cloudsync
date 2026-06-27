@@ -405,6 +405,113 @@ object GitHubSyncManager {
     }
 
     /**
+     * Full sync with rate-limit awareness.
+     * Returns a pair of SyncResult and optional backoff seconds.
+     * If backoff > 0, the caller should increase its sync interval.
+     */
+    fun fullSyncWithRateInfo(context: Context, creds: SyncCredentials): Pair<SyncResult, Int> {
+        if (!creds.isConfigured()) {
+            return Pair(SyncResult(false, "GitHub token not configured"), 0)
+        }
+
+        Log.d(TAG, "Starting rate-aware full sync...")
+
+        val gistId = ensureGist(creds)
+            ?: return Pair(SyncResult(false, "Failed to create/find sync gist"), 0)
+
+        // Read local data
+        val localPositions = LocalDataManager.readAllPlaybackPositions(context)
+        val localHistory = LocalDataManager.readAllWatchHistory(context)
+        val localResume = LocalDataManager.readAllResumeWatching(context)
+        val localDeletedResume = LocalDataManager.readAllDeletedResume(context)
+        val localPrefs = LocalDataManager.readAllPreferences(context)
+
+        val localPayload = SyncPayload(
+            version = 1,
+            lastSync = System.currentTimeMillis(),
+            deviceId = creds.deviceId,
+            deviceName = creds.deviceName,
+            watchHistory = localHistory,
+            playbackPositions = localPositions,
+            resumeWatching = localResume,
+            deletedResumeWatching = localDeletedResume,
+            preferences = localPrefs
+        )
+
+        // Fetch remote with rate-limit awareness
+        val fetchResult = GitHubApiClient.fetchGistResult(creds.token, gistId)
+        val remotePayload: SyncPayload?
+        when (fetchResult) {
+            is ApiResult.Success -> remotePayload = fetchResult.data
+            is ApiResult.RateLimited -> {
+                Log.w(TAG, "Rate limited on fetch, backing off ${fetchResult.retryAfterSeconds}s")
+                return Pair(
+                    SyncResult(false, "Rate limited, retrying later"),
+                    fetchResult.retryAfterSeconds
+                )
+            }
+            is ApiResult.Error -> {
+                Log.e(TAG, "Fetch error: ${fetchResult.message}")
+                remotePayload = null
+            }
+        }
+
+        // Merge
+        val merged = if (remotePayload != null) {
+            mergePayloads(localPayload, remotePayload)
+        } else {
+            localPayload
+        }
+
+        // Write merged to local
+        var itemsPulled = 0
+        if (remotePayload != null) {
+            itemsPulled = writeRemoteDataToLocal(context, localPayload, merged)
+        }
+
+        // Push with rate-limit awareness
+        val updatedMerged = merged.copy(
+            lastSync = System.currentTimeMillis(),
+            deviceId = creds.deviceId,
+            deviceName = creds.deviceName
+        )
+
+        val pushResult = GitHubApiClient.updateGistResult(creds.token, gistId, updatedMerged)
+        when (pushResult) {
+            is ApiResult.Success -> {
+                val totalItems = merged.playbackPositions.size +
+                    merged.watchHistory.size +
+                    merged.resumeWatching.size +
+                    merged.preferences.size
+                Log.d(TAG, "Rate-aware sync complete: $totalItems items, $itemsPulled pulled")
+                return Pair(
+                    SyncResult(
+                        success = true,
+                        message = "Synced $totalItems items ($itemsPulled pulled)",
+                        itemsPushed = totalItems,
+                        itemsPulled = itemsPulled,
+                        timestamp = System.currentTimeMillis()
+                    ),
+                    0 // No backoff needed
+                )
+            }
+            is ApiResult.RateLimited -> {
+                Log.w(TAG, "Rate limited on push, backing off ${pushResult.retryAfterSeconds}s")
+                return Pair(
+                    SyncResult(false, "Rate limited on push, retrying later", itemsPulled = itemsPulled),
+                    pushResult.retryAfterSeconds
+                )
+            }
+            is ApiResult.Error -> {
+                return Pair(
+                    SyncResult(false, "Failed to push: ${pushResult.message}", itemsPulled = itemsPulled),
+                    0
+                )
+            }
+        }
+    }
+
+    /**
      * Generate a unique device ID.
      */
     fun generateDeviceId(): String {

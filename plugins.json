@@ -3,7 +3,7 @@
     "name": "CloudSync",
     "internalName": "CloudSync",
     "description": "Seamless cross-device sync for CloudStream. Syncs exact playback position, watch history, continue watching, episode progress, and source preferences between all your devices via a private GitHub Gist.",
-    "version": 5,
+    "version": 6,
     "url": "https://raw.githubusercontent.com/DeepBlue9789/cloudsync/main/CloudSync.cs3",
     "authors": [
       "CloudSyncDev"

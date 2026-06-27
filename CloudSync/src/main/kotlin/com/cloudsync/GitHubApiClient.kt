@@ -10,6 +10,15 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import java.util.concurrent.TimeUnit
 
 /**
+ * Result type for GitHub API calls that may be rate-limited.
+ */
+sealed class ApiResult<out T> {
+    data class Success<T>(val data: T) : ApiResult<T>()
+    data class RateLimited(val retryAfterSeconds: Int = 60) : ApiResult<Nothing>()
+    data class Error(val message: String, val code: Int = 0) : ApiResult<Nothing>()
+}
+
+/**
  * GitHub Gist API client for storing/retrieving sync data.
  *
  * Uses a single private gist with a marker description to store all sync data.
@@ -115,8 +124,9 @@ object GitHubApiClient {
 
     /**
      * Fetch the current sync payload from a gist.
+     * Returns ApiResult to allow callers to handle rate limiting.
      */
-    fun fetchGist(token: String, gistId: String): SyncPayload? {
+    fun fetchGistResult(token: String, gistId: String): ApiResult<SyncPayload> {
         try {
             val request = Request.Builder()
                 .url("$API_BASE/gists/$gistId")
@@ -127,29 +137,49 @@ object GitHubApiClient {
 
             val response = client.newCall(request).execute()
             if (!response.isSuccessful) {
+                if (response.code == 429 || response.code == 403) {
+                    val retryAfter = response.header("Retry-After")?.toIntOrNull() ?: 60
+                    Log.w(TAG, "Rate limited on fetch: ${response.code}, retry after ${retryAfter}s")
+                    return ApiResult.RateLimited(retryAfter)
+                }
                 Log.e(TAG, "Failed to fetch gist: ${response.code}")
-                return null
+                return ApiResult.Error("Failed to fetch gist", response.code)
             }
 
-            val body = response.body?.string() ?: return null
+            val body = response.body?.string()
+                ?: return ApiResult.Error("Empty response body")
             val gistResponse = mapper.readValue<Map<String, Any?>>(body)
 
             @Suppress("UNCHECKED_CAST")
-            val files = gistResponse["files"] as? Map<String, Map<String, Any?>> ?: return null
-            val syncFile = files[SYNC_FILE_NAME] ?: return null
-            val content = syncFile["content"] as? String ?: return null
+            val files = gistResponse["files"] as? Map<String, Map<String, Any?>>
+                ?: return ApiResult.Error("No files in gist")
+            val syncFile = files[SYNC_FILE_NAME]
+                ?: return ApiResult.Error("Sync file not found in gist")
+            val content = syncFile["content"] as? String
+                ?: return ApiResult.Error("No content in sync file")
 
-            return mapper.readValue<SyncPayload>(content)
+            return ApiResult.Success(mapper.readValue<SyncPayload>(content))
         } catch (e: Exception) {
             Log.e(TAG, "Error fetching gist: ${e.message}")
-            return null
+            return ApiResult.Error("Exception: ${e.message}")
+        }
+    }
+
+    /**
+     * Convenience wrapper that returns nullable for backward compatibility.
+     */
+    fun fetchGist(token: String, gistId: String): SyncPayload? {
+        return when (val result = fetchGistResult(token, gistId)) {
+            is ApiResult.Success -> result.data
+            else -> null
         }
     }
 
     /**
      * Update the sync gist with new data.
+     * Returns ApiResult to allow callers to handle rate limiting.
      */
-    fun updateGist(token: String, gistId: String, data: SyncPayload): Boolean {
+    fun updateGistResult(token: String, gistId: String, data: SyncPayload): ApiResult<Boolean> {
         try {
             val jsonData = mapper.writeValueAsString(data)
 
@@ -173,15 +203,30 @@ object GitHubApiClient {
 
             val response = client.newCall(request).execute()
             if (!response.isSuccessful) {
+                if (response.code == 429 || response.code == 403) {
+                    val retryAfter = response.header("Retry-After")?.toIntOrNull() ?: 60
+                    Log.w(TAG, "Rate limited on update: ${response.code}, retry after ${retryAfter}s")
+                    return ApiResult.RateLimited(retryAfter)
+                }
                 Log.e(TAG, "Failed to update gist: ${response.code} — ${response.body?.string()}")
-                return false
+                return ApiResult.Error("Failed to update gist", response.code)
             }
 
             Log.d(TAG, "Successfully updated sync gist")
-            return true
+            return ApiResult.Success(true)
         } catch (e: Exception) {
             Log.e(TAG, "Error updating gist: ${e.message}")
-            return false
+            return ApiResult.Error("Exception: ${e.message}")
+        }
+    }
+
+    /**
+     * Convenience wrapper that returns boolean for backward compatibility.
+     */
+    fun updateGist(token: String, gistId: String, data: SyncPayload): Boolean {
+        return when (updateGistResult(token, gistId, data)) {
+            is ApiResult.Success -> true
+            else -> false
         }
     }
 
