@@ -58,8 +58,12 @@ class CloudSyncPlugin : Plugin() {
     /** Periodic sync tick interval */
     private val PERIODIC_TICK_MS = 20_000L
 
-    /** Debounce time for detecting player pause (silence in position updates) */
-    private val PAUSE_DEBOUNCE_MS = 2_000L
+    /**
+     * Debounce time for detecting player pause (silence in position updates).
+     * Increased to 5s to avoid false-positives during source-switching, where the
+     * player releases and reloads (stopping position updates momentarily).
+     */
+    private val PAUSE_DEBOUNCE_MS = 5_000L
 
     /** Count of started activities — when this drops to 0, app went to background */
     @Volatile
@@ -72,6 +76,19 @@ class CloudSyncPlugin : Plugin() {
     /** Whether position keys are actively being updated (playback in progress) */
     @Volatile
     private var isPlaybackActive = false
+
+    /**
+     * Timestamp of the last position-reset-to-zero event. When a video source is
+     * switched, the player releases and reloads, briefly writing position=0 to prefs
+     * before resuming. If a pause-debounce fires and the last position reset was
+     * recent (within 6s), it is a source switch, NOT a user pause — skip the sync.
+     */
+    @Volatile
+    private var lastPositionResetMs = 0L
+
+    /** The last observed playback position in ms (for detecting resets to 0) */
+    @Volatile
+    private var lastObservedPositionMs = -1L
 
     companion object {
         private const val TAG = "CloudSync"
@@ -220,9 +237,10 @@ class CloudSyncPlugin : Plugin() {
     /**
      * Listen for SharedPreferences changes. Handles two sync triggers:
      *
-     * Trigger 1 (Player Pause): When video_pos_dur keys update, we start a 2-second
+     * Trigger 1 (Player Pause): When video_pos_dur keys update, we start a 5-second
      * debounce timer. Each new position update resets the timer. When updates stop
-     * (player paused), the timer fires and triggers a sync.
+     * (player paused), the timer fires and triggers a sync. A source-switch guard
+     * suppresses false-positive syncs caused by player releases during source changes.
      *
      * Trigger 5 (Episode Change): When result_episode or result_season keys change,
      * trigger an immediate sync — the user switched episodes.
@@ -234,7 +252,7 @@ class CloudSyncPlugin : Plugin() {
         try {
             val prefs = context.getSharedPrefs()
 
-            prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { sharedPrefs, key ->
                 if (key == null) return@OnSharedPreferenceChangeListener
 
                 when {
@@ -243,13 +261,43 @@ class CloudSyncPlugin : Plugin() {
                         isDirty = true
                         isPlaybackActive = true
 
+                        // Detect position resets to 0 (source switch / player reload).
+                        // video_pos_dur is stored as "positionMs/durationMs" or just a long.
+                        // We read the raw value to check if position reset to 0.
+                        try {
+                            val rawValue = sharedPrefs.all[key]
+                            val posMs: Long? = when (rawValue) {
+                                is Long -> rawValue
+                                is Int -> rawValue.toLong()
+                                is String -> rawValue.toLongOrNull() ?: rawValue.substringBefore('/').toLongOrNull()
+                                else -> null
+                            }
+                            if (posMs != null && posMs <= 0L && lastObservedPositionMs > 3000L) {
+                                // Position jumped to 0 from a non-zero value → source switch
+                                lastPositionResetMs = System.currentTimeMillis()
+                                Log.d(TAG, "Position reset to 0 detected (source switch guard set)")
+                            }
+                            if (posMs != null && posMs > 0L) {
+                                lastObservedPositionMs = posMs
+                            }
+                        } catch (_: Exception) {}
+
                         // Trigger 1: Debounce — sync when position stops updating (pause)
+                        // Using 5s debounce to avoid false-positives during source-switching.
                         pauseDebounceJob?.cancel()
                         pauseDebounceJob = pluginScope.launch {
                             delay(PAUSE_DEBOUNCE_MS)
-                            // If we get here, position hasn't updated for 2s → player paused
+                            // If we get here, position hasn't updated for 5s.
+                            // Check whether a recent position-reset suggests a source switch.
+                            val timeSinceReset = System.currentTimeMillis() - lastPositionResetMs
+                            if (timeSinceReset < (PAUSE_DEBOUNCE_MS + 3_000L)) {
+                                // Position reset recently → this is a source switch, not a user pause.
+                                Log.d(TAG, "[Trigger 1] Skipping pause sync — source switch detected (reset ${timeSinceReset}ms ago)")
+                                isPlaybackActive = false
+                                return@launch
+                            }
                             isPlaybackActive = false
-                            Log.d(TAG, "[Trigger 1] Player pause detected (position silence)")
+                            Log.d(TAG, "[Trigger 1] Player pause detected (position silence for ${PAUSE_DEBOUNCE_MS / 1000}s)")
                             requestSync(context, "player_pause", force = true)
                         }
                     }
