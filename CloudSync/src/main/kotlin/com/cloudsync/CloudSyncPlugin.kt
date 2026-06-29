@@ -117,38 +117,41 @@ class CloudSyncPlugin : Plugin() {
          * freshly synced data (bookmarks, continue watching, etc.) appears
          * without requiring a manual app restart.
          *
-         * We use reflection because these are internal MainActivity statics
-         * that aren't exposed in the plugin API.
+         * bookmarksUpdatedEvent, reloadHomeEvent, and reloadLibraryEvent are
+         * Event<Boolean> FIELDS in MainActivity's companion object — not methods.
+         * We must:
+         *   1. Get the Companion object via the static "Companion" field.
+         *   2. Reflectively read the Event<Boolean> field from it.
+         *   3. Call the Event's invoke() operator (i.e. Event.invoke(true)).
          */
         fun triggerUIRefresh() {
             try {
                 val mainActivityClass = Class.forName("com.lagradost.cloudstream3.MainActivity")
 
-                // Fire bookmarksUpdatedEvent(true) — refreshes library & bookmarks
-                try {
-                    val bookmarksMethod = mainActivityClass.getMethod("bookmarksUpdatedEvent", Boolean::class.javaPrimitiveType)
-                    bookmarksMethod.invoke(null, true)
-                    Log.d(TAG, "Triggered bookmarksUpdatedEvent")
-                } catch (e: Exception) {
-                    Log.w(TAG, "Could not trigger bookmarksUpdatedEvent: ${e.message}")
-                }
+                // Obtain the companion object singleton (stored as static field "Companion")
+                val companionField = mainActivityClass.getDeclaredField("Companion")
+                companionField.isAccessible = true
+                val companion = companionField.get(null)
+                    ?: run {
+                        Log.w(TAG, "MainActivity.Companion is null — cannot refresh UI")
+                        return
+                    }
 
-                // Fire reloadHomeEvent(true) — refreshes home page (Continue Watching)
-                try {
-                    val reloadMethod = mainActivityClass.getMethod("reloadHomeEvent", Boolean::class.javaPrimitiveType)
-                    reloadMethod.invoke(null, true)
-                    Log.d(TAG, "Triggered reloadHomeEvent")
-                } catch (e: Exception) {
-                    Log.w(TAG, "Could not trigger reloadHomeEvent: ${e.message}")
-                }
-
-                // Fire reloadLibraryEvent(true) — refreshes library tab
-                try {
-                    val libraryMethod = mainActivityClass.getMethod("reloadLibraryEvent", Boolean::class.javaPrimitiveType)
-                    libraryMethod.invoke(null, true)
-                    Log.d(TAG, "Triggered reloadLibraryEvent")
-                } catch (e: Exception) {
-                    Log.w(TAG, "Could not trigger reloadLibraryEvent: ${e.message}")
+                // Fire each event on the main thread
+                for (eventName in listOf("bookmarksUpdatedEvent", "reloadHomeEvent", "reloadLibraryEvent")) {
+                    try {
+                        val eventField = companion.javaClass.getDeclaredField(eventName)
+                        eventField.isAccessible = true
+                        val eventObj = eventField.get(companion)
+                            ?: continue
+                        // Event<Boolean>.invoke(value: Boolean) — the JVM erases generics,
+                        // so the method signature is invoke(Object)
+                        val invokeMethod = eventObj.javaClass.getMethod("invoke", Any::class.java)
+                        invokeMethod.invoke(eventObj, true)
+                        Log.d(TAG, "Triggered $eventName")
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Could not trigger $eventName: ${e.message}")
+                    }
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "Could not find MainActivity for UI refresh: ${e.message}")
@@ -280,17 +283,28 @@ class CloudSyncPlugin : Plugin() {
 
     // ═══════════════════════════════════════════════════════════════════════════
     // TRIGGER 2 & 3: Lifecycle Callbacks
-    // Detects player close and app going to background.
+    // Detects app going to background (which covers player close + app exit).
     // ═══════════════════════════════════════════════════════════════════════════
 
     /**
-     * Register ActivityLifecycleCallbacks to detect:
+     * Register ActivityLifecycleCallbacks to detect app going to background.
      *
-     * Trigger 2 (Player Closed): When an activity whose class name contains "player"
-     * (case-insensitive) is stopped, it means the player was closed.
+     * IMPORTANT: In Cloudstream, the player (GeneratorPlayer) is a Fragment
+     * embedded inside MainActivity — NOT a separate Activity. There is no
+     * dedicated "player Activity" that gets started/stopped during streaming.
+     * The only separate player Activity is DownloadedPlayerActivity (offline).
      *
-     * Trigger 3 (App Background): Track started activity count. When it drops to 0,
-     * the entire app went to background.
+     * Therefore, we cannot detect "player closed" by watching for an activity
+     * whose name contains "player" — that never fires during streaming.
+     *
+     * Instead, we:
+     *   - Trigger 2 (Player/app close): sync whenever ANY activity count drops
+     *     to 0 (app fully backgrounded), because that always means the player
+     *     has stopped. We set isDirty=true to ensure a sync fires.
+     *   - Trigger 3 (DownloadedPlayerActivity): detect offline player stopping
+     *     by its exact class name for completeness.
+     *   - Trigger 4 (onActivityPaused): when MainActivity is paused with dirty
+     *     data (e.g., user pressed home), sync immediately.
      */
     private fun setupLifecycleCallbacks(context: Context) {
         val creds = getCredentials()
@@ -307,32 +321,34 @@ class CloudSyncPlugin : Plugin() {
                 }
 
                 override fun onActivityStopped(activity: android.app.Activity) {
-                    // Trigger 2: Player closed
-                    val activityName = activity.javaClass.simpleName.lowercase()
-                    if (activityName.contains("player")) {
-                        isDirty = true  // Player always has unsaved progress
-                        Log.d(TAG, "[Trigger 2] Player activity stopped: ${activity.javaClass.simpleName}")
-                        requestSync(activity.applicationContext, "player_close", force = true)
+                    startedActivityCount--
+
+                    val activityName = activity.javaClass.simpleName
+
+                    // Trigger 2a: DownloadedPlayerActivity stopped (offline player)
+                    if (activityName == "DownloadedPlayerActivity") {
+                        isDirty = true
+                        Log.d(TAG, "[Trigger 2] DownloadedPlayerActivity stopped")
+                        requestSync(activity.applicationContext, "offline_player_close", force = true)
                     }
 
-                    // Trigger 3: App going to background
-                    startedActivityCount--
+                    // Trigger 2b / 3: Entire app went to background
                     if (startedActivityCount <= 0) {
                         startedActivityCount = 0
-                        if (isDirty) {
-                            Log.d(TAG, "[Trigger 3] App going to background with dirty data")
-                            requestSync(activity.applicationContext, "app_background", force = true)
-                        }
+                        // Always mark dirty when app backgrounds — player was likely active
+                        isDirty = true
+                        Log.d(TAG, "[Trigger 3] App fully backgrounded via ${activityName}")
+                        requestSync(activity.applicationContext, "app_background", force = true)
                     }
                 }
 
                 override fun onActivityPaused(activity: android.app.Activity) {
-                    // Trigger 3 also: sync on any activity pause if data is dirty
-                    // This catches the case where the app is being killed
-                    val activityName = activity.javaClass.simpleName.lowercase()
-                    if (activityName.contains("player") && isDirty) {
-                        Log.d(TAG, "[Trigger 3] Player activity paused with dirty data")
-                        requestSync(activity.applicationContext, "app_pause", force = true)
+                    // Sync when MainActivity is paused with dirty data
+                    // (covers: user pressed Home while watching, or system killed app)
+                    val activityName = activity.javaClass.simpleName
+                    if (activityName == "MainActivity" && isDirty) {
+                        Log.d(TAG, "[Trigger 3] MainActivity paused with dirty data")
+                        requestSync(activity.applicationContext, "main_pause", force = true)
                     }
                 }
 

@@ -1,15 +1,21 @@
 package com.cloudsync
 
 import android.content.Context
+import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.RippleDrawable
+import android.graphics.drawable.ColorDrawable
+import android.content.res.ColorStateList
 import android.os.Handler
 import android.os.Looper
 import android.widget.Toast
 import android.app.AlertDialog
 import android.text.InputType
+import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.*
 import android.graphics.Color
+import android.graphics.Typeface
 import android.util.TypedValue
 import android.util.Base64
 import com.lagradost.api.Log
@@ -26,6 +32,19 @@ object CloudSyncSettings {
     private const val TAG = "CloudSync-Settings"
     private val settingsScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    // ── Design Tokens ──────────────────────────────────────────────────────────
+    private val CLR_BG          = Color.parseColor("#0F1117")   // Near-black background
+    private val CLR_SURFACE     = Color.parseColor("#1A1D27")   // Card surface
+    private val CLR_SURFACE2    = Color.parseColor("#22263A")   // Elevated surface
+    private val CLR_ACCENT      = Color.parseColor("#6C63FF")   // Purple accent
+    private val CLR_ACCENT2     = Color.parseColor("#9D8FFF")   // Lighter purple
+    private val CLR_SUCCESS     = Color.parseColor("#4CAF50")
+    private val CLR_DANGER      = Color.parseColor("#FF5252")
+    private val CLR_TEXT        = Color.parseColor("#F0F0F8")   // Near-white
+    private val CLR_TEXT_SEC    = Color.parseColor("#9B9BB4")   // Muted
+    private val CLR_TEXT_HINT   = Color.parseColor("#55556A")   // Hint
+    private val CLR_DIVIDER     = Color.parseColor("#2A2D40")
+
     /**
      * Perform initial setup: validate credentials, find/create remote record, and do first sync.
      */
@@ -38,7 +57,7 @@ object CloudSyncSettings {
             try {
                 if (creds.syncMethod == "pocketbase") {
                     withContext(Dispatchers.Main) { showToast("Validating PocketBase credentials...") }
-                    
+
                     val token = PocketBaseApiClient.authenticate(creds)
                     if (token == null) {
                         val result = SyncResult(false, "Invalid PocketBase credentials.")
@@ -146,24 +165,20 @@ object CloudSyncSettings {
                     return@launch
                 }
 
-                withContext(Dispatchers.Main) {
-                    showToast("☁️ Syncing...")
-                }
+                withContext(Dispatchers.Main) { showToast("☁️ Syncing...") }
 
                 val result = if (creds.syncMethod == "pocketbase") {
                     PocketBaseSyncManager.fullSync(context, creds)
                 } else {
                     GitHubSyncManager.fullSync(context, creds)
                 }
-                
+
                 CloudSyncPlugin.saveLastSyncResult(result)
 
                 withContext(Dispatchers.Main) {
                     onResult(result)
                     if (result.success) {
-                        if (result.itemsPulled > 0) {
-                            CloudSyncPlugin.triggerUIRefresh()
-                        }
+                        if (result.itemsPulled > 0) CloudSyncPlugin.triggerUIRefresh()
                         showToast("☁️ ${result.message}")
                     } else {
                         showToast("❌ ${result.message}")
@@ -190,28 +205,20 @@ object CloudSyncSettings {
                     withContext(Dispatchers.Main) { onResult(SyncResult(false, "Not configured")) }
                     return@launch
                 }
-
                 withContext(Dispatchers.Main) { showToast("📥 Pulling from cloud...") }
-
                 val result = if (creds.syncMethod == "pocketbase") {
                     PocketBaseSyncManager.pullOnly(context, creds)
                 } else {
                     GitHubSyncManager.pullOnly(context, creds)
                 }
-                
                 CloudSyncPlugin.saveLastSyncResult(result)
-
                 withContext(Dispatchers.Main) {
                     onResult(result)
-                    if (result.success && result.itemsPulled > 0) {
-                        CloudSyncPlugin.triggerUIRefresh()
-                    }
+                    if (result.success && result.itemsPulled > 0) CloudSyncPlugin.triggerUIRefresh()
                     showToast(if (result.success) "📥 ${result.message}" else "❌ ${result.message}")
                 }
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) {
-                    onResult(SyncResult(false, "Pull failed: ${e.message}"))
-                }
+                withContext(Dispatchers.Main) { onResult(SyncResult(false, "Pull failed: ${e.message}")) }
             }
         }
     }
@@ -227,25 +234,19 @@ object CloudSyncSettings {
                     withContext(Dispatchers.Main) { onResult(SyncResult(false, "Not configured")) }
                     return@launch
                 }
-
                 withContext(Dispatchers.Main) { showToast("📤 Pushing to cloud...") }
-
                 val result = if (creds.syncMethod == "pocketbase") {
                     PocketBaseSyncManager.pushOnly(context, creds)
                 } else {
                     GitHubSyncManager.pushOnly(context, creds)
                 }
-                
                 CloudSyncPlugin.saveLastSyncResult(result)
-
                 withContext(Dispatchers.Main) {
                     onResult(result)
                     showToast(if (result.success) "📤 ${result.message}" else "❌ ${result.message}")
                 }
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) {
-                    onResult(SyncResult(false, "Push failed: ${e.message}"))
-                }
+                withContext(Dispatchers.Main) { onResult(SyncResult(false, "Push failed: ${e.message}")) }
             }
         }
     }
@@ -276,19 +277,12 @@ object CloudSyncSettings {
      */
     fun resetSync(context: Context) {
         val creds = CloudSyncPlugin.getCredentials()
-
-        // Optionally delete the gist/record if desired (omitted for safety, or implement per backend)
         if (creds.isConfigured() && creds.hasGist()) {
             settingsScope.launch {
-                try {
-                    GitHubApiClient.deleteGist(creds.token, creds.gistId)
-                } catch (e: Exception) {
-                    Log.w(TAG, "Failed to delete gist: ${e.message}")
-                }
+                try { GitHubApiClient.deleteGist(creds.token, creds.gistId) }
+                catch (e: Exception) { Log.w(TAG, "Failed to delete gist: ${e.message}") }
             }
         }
-
-        // Clear credentials
         CloudSyncPlugin.saveCredentials(SyncCredentials())
         showToast("CloudSync reset complete")
     }
@@ -321,285 +315,242 @@ object CloudSyncSettings {
                 val json = String(Base64.decode(encoded.trim(), Base64.NO_WRAP), Charsets.UTF_8)
                 val newCreds = com.fasterxml.jackson.module.kotlin.jacksonObjectMapper()
                     .readValue(json, SyncCredentials::class.java)
-
                 if (!newCreds.isConfigured()) {
                     withContext(Dispatchers.Main) { onResult(SyncResult(false, "Invalid config string")) }
                     return@launch
                 }
-
                 val finalCreds = newCreds.copy(
                     deviceId = CloudSyncPlugin.getCredentials().deviceId.ifBlank { GitHubSyncManager.generateDeviceId() }
                 )
                 CloudSyncPlugin.saveCredentials(finalCreds)
-
                 withContext(Dispatchers.Main) { showToast("Credentials imported! Syncing...") }
-
                 val syncResult = if (finalCreds.syncMethod == "pocketbase") {
                     PocketBaseSyncManager.fullSync(context, finalCreds)
                 } else {
                     GitHubSyncManager.fullSync(context, finalCreds)
                 }
-                
                 CloudSyncPlugin.saveLastSyncResult(syncResult)
-
                 withContext(Dispatchers.Main) {
-                    if (syncResult.success && syncResult.itemsPulled > 0) {
-                        CloudSyncPlugin.triggerUIRefresh()
-                    }
+                    if (syncResult.success && syncResult.itemsPulled > 0) CloudSyncPlugin.triggerUIRefresh()
                     onResult(syncResult)
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Import failed: ${e.message}")
-                withContext(Dispatchers.Main) {
-                    onResult(SyncResult(false, "Import failed: ${e.message}"))
-                }
+                withContext(Dispatchers.Main) { onResult(SyncResult(false, "Import failed: ${e.message}")) }
             }
         }
     }
 
+    // ═══════════════════════════════════════════════════════════════════════════
+    // MODERN UI — Settings Dialog
+    // ═══════════════════════════════════════════════════════════════════════════
+
     /**
-     * Show custom settings layout dynamically in a dialog.
+     * Show the modern settings dialog.
      */
     fun showSettingsDialog(context: Context) {
-        val builder = AlertDialog.Builder(context)
-        val scrollView = ScrollView(context)
-        val layout = LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
-            val padding = dp(context, 16)
-            setPadding(padding, padding, padding, padding)
-        }
-        
-        // Title
-        val titleView = TextView(context).apply {
-            text = "☁️ CloudSync Settings"
-            textSize = 20f
-            typeface = android.graphics.Typeface.DEFAULT_BOLD
-            gravity = android.view.Gravity.CENTER_HORIZONTAL
-            setTextColor(Color.WHITE)
-            setPadding(0, 0, 0, dp(context, 16))
-        }
-        layout.addView(titleView)
-        
-        // Status Card
         val creds = CloudSyncPlugin.getCredentials()
-        val statusView = TextView(context).apply {
-            val lastSync = CloudSyncPlugin.getLastSyncTime()
-            val lastMsg = CloudSyncPlugin.getLastSyncMessage()
-            val syncText = if (lastSync > 0) {
-                val diff = System.currentTimeMillis() - lastSync
-                val timeAgo = when {
-                    diff < 60_000 -> "Just now"
-                    diff < 3_600_000 -> "${diff / 60_000}m ago"
-                    diff < 86_400_000 -> "${diff / 3_600_000}h ago"
-                    else -> "${diff / 86_400_000}d ago"
-                }
-                "Last Sync: $timeAgo\nResult: $lastMsg\nMethod: ${creds.syncMethod.uppercase()}"
-            } else {
-                "Last Sync: Never\nStatus: Unconfigured"
-            }
-            text = syncText
-            textSize = 14f
-            setPadding(dp(context, 12), dp(context, 12), dp(context, 12), dp(context, 12))
-            setBackgroundColor(Color.parseColor("#1AFFFFFF"))
-            setTextColor(Color.LTGRAY)
+
+        val scrollView = ScrollView(context).apply {
+            background = ColorDrawable(CLR_BG)
         }
-        layout.addView(statusView)
-        layout.addView(createSpacer(context, 12))
-        
-        // Device Name Input
-        layout.addView(createLabel(context, "Device Name (identifies sync source):"))
-        val deviceInput = EditText(context).apply {
-            inputType = InputType.TYPE_CLASS_TEXT
-            setText(creds.deviceName.ifBlank { android.os.Build.MODEL })
-            hint = "My Phone"
-            setTextColor(Color.WHITE)
-            setHintTextColor(Color.GRAY)
+
+        val root = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            val p = dp(context, 16)
+            setPadding(p, dp(context, 8), p, dp(context, 24))
+            background = ColorDrawable(CLR_BG)
         }
-        layout.addView(deviceInput)
-        layout.addView(createSpacer(context, 12))
-        
-        // Sync Method Radio Group
-        layout.addView(createLabel(context, "Sync Provider:"))
-        val methodGroup = RadioGroup(context).apply { orientation = RadioGroup.HORIZONTAL }
-        val rbGithub = RadioButton(context).apply { text = "GitHub Gist"; setTextColor(Color.WHITE) }
-        val rbPocketbase = RadioButton(context).apply { text = "PocketBase"; setTextColor(Color.WHITE) }
-        methodGroup.addView(rbGithub)
-        methodGroup.addView(rbPocketbase)
-        if (creds.syncMethod == "pocketbase") rbPocketbase.isChecked = true else rbGithub.isChecked = true
-        layout.addView(methodGroup)
-        
-        // GitHub Container
+
+        // ── Header ────────────────────────────────────────────────────────────
+        root.addView(buildHeader(context))
+        root.addView(spacer(context, 16))
+
+        // ── Status Card ───────────────────────────────────────────────────────
+        root.addView(buildStatusCard(context, creds))
+        root.addView(spacer(context, 20))
+
+        // ── Provider Section ──────────────────────────────────────────────────
+        root.addView(sectionLabel(context, "SYNC PROVIDER"))
+        root.addView(spacer(context, 8))
+
+        // Radio pill group
+        val rbGithub = buildRadioPill(context, "GitHub Gist", creds.syncMethod != "pocketbase")
+        val rbPocketbase = buildRadioPill(context, "PocketBase", creds.syncMethod == "pocketbase")
+        val providerRow = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(rbGithub, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { rightMargin = dp(context, 6) })
+            addView(rbPocketbase, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        }
+        root.addView(providerRow)
+        root.addView(spacer(context, 16))
+
+        // ── Credentials Card ──────────────────────────────────────────────────
+        root.addView(sectionLabel(context, "CREDENTIALS"))
+        root.addView(spacer(context, 8))
+
+        val credsCard = buildCard(context)
+
+        // Device Name
+        credsCard.addView(fieldLabel(context, "Device Name"))
+        val deviceInput = buildInput(context, creds.deviceName.ifBlank { android.os.Build.MODEL }, "My Phone")
+        credsCard.addView(deviceInput)
+        credsCard.addView(spacer(context, 12))
+
+        // GitHub fields
         val ghContainer = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
-        ghContainer.addView(createLabel(context, "GitHub Token (classic, 'gist' scope):"))
-        val tokenInput = EditText(context).apply {
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-            setText(creds.token)
-            hint = "ghp_xxxxxxxxxxxxxxxxxxxxxx"
-            setTextColor(Color.WHITE)
-            setHintTextColor(Color.GRAY)
-        }
+        ghContainer.addView(fieldLabel(context, "GitHub Token"))
+        val tokenInput = buildInput(
+            context, creds.token, "ghp_xxxxxxxxxxxxxxxx",
+            InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+        )
         ghContainer.addView(tokenInput)
-        
-        // PocketBase Container
-        val pbContainer = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
-        pbContainer.addView(createLabel(context, "PocketBase URL:"))
-        val pbUrlInput = EditText(context).apply {
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
-            setText(creds.pbUrl)
-            hint = "https://pb.example.com"
-            setTextColor(Color.WHITE)
-            setHintTextColor(Color.GRAY)
+        credsCard.addView(ghContainer)
+
+        // PocketBase fields
+        val pbContainer = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
         }
+        pbContainer.addView(fieldLabel(context, "PocketBase URL"))
+        val pbUrlInput = buildInput(context, creds.pbUrl, "https://pb.example.com",
+            InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI)
         pbContainer.addView(pbUrlInput)
-        pbContainer.addView(createLabel(context, "Email:"))
-        val pbEmailInput = EditText(context).apply {
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
-            setText(creds.pbEmail)
-            hint = "user@example.com"
-            setTextColor(Color.WHITE)
-            setHintTextColor(Color.GRAY)
-        }
+        pbContainer.addView(spacer(context, 8))
+        pbContainer.addView(fieldLabel(context, "Email"))
+        val pbEmailInput = buildInput(context, creds.pbEmail, "user@example.com",
+            InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS)
         pbContainer.addView(pbEmailInput)
-        pbContainer.addView(createLabel(context, "Password:"))
-        val pbPasswordInput = EditText(context).apply {
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-            setText(creds.pbPassword)
-            hint = "********"
-            setTextColor(Color.WHITE)
-            setHintTextColor(Color.GRAY)
-        }
+        pbContainer.addView(spacer(context, 8))
+        pbContainer.addView(fieldLabel(context, "Password"))
+        val pbPasswordInput = buildInput(context, creds.pbPassword, "••••••••",
+            InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD)
         pbContainer.addView(pbPasswordInput)
+        credsCard.addView(pbContainer)
 
-        layout.addView(ghContainer)
-        layout.addView(pbContainer)
-        
-        fun updateContainers() {
-            ghContainer.visibility = if (rbGithub.isChecked) View.VISIBLE else View.GONE
-            pbContainer.visibility = if (rbPocketbase.isChecked) View.VISIBLE else View.GONE
+        root.addView(credsCard)
+        root.addView(spacer(context, 20))
+
+        // Provider visibility toggle
+        fun syncProviderVisibility() {
+            val isPb = rbPocketbase.isChecked
+            ghContainer.visibility = if (!isPb) View.VISIBLE else View.GONE
+            pbContainer.visibility = if (isPb) View.VISIBLE else View.GONE
+            // Update pill appearance
+            updatePillStyle(context, rbGithub, !isPb)
+            updatePillStyle(context, rbPocketbase, isPb)
         }
-        updateContainers()
-        methodGroup.setOnCheckedChangeListener { _, _ -> updateContainers() }
-        layout.addView(createSpacer(context, 12))
-        
-        // Switches
-        val autoSyncSwitch = createSwitch(context, "Real-time Auto-Sync", creds.autoSync)
-        layout.addView(autoSyncSwitch)
-        
-        val syncOnOpenSwitch = createSwitch(context, "Sync on App Open", creds.syncOnOpen)
-        layout.addView(syncOnOpenSwitch)
-        
-        val syncOnPlaybackEndSwitch = createSwitch(context, "Sync on Playback Pause/End", creds.syncOnPlaybackEnd)
-        layout.addView(syncOnPlaybackEndSwitch)
-        
-        val showSyncToastsSwitch = createSwitch(context, "Show Sync Toasts", creds.showSyncToasts)
-        layout.addView(showSyncToastsSwitch)
-        
-        layout.addView(createSpacer(context, 16))
-        
-        // Buttons
-        val actionLayout = LinearLayout(context).apply {
+        syncProviderVisibility()
+        rbGithub.setOnClickListener { rbPocketbase.isChecked = false; rbGithub.isChecked = true; syncProviderVisibility() }
+        rbPocketbase.setOnClickListener { rbGithub.isChecked = false; rbPocketbase.isChecked = true; syncProviderVisibility() }
+
+        // ── Sync Behaviour Section ────────────────────────────────────────────
+        root.addView(sectionLabel(context, "SYNC BEHAVIOUR"))
+        root.addView(spacer(context, 8))
+
+        val behavCard = buildCard(context)
+        val autoSyncSwitch = buildModernSwitch(context, "Real-time Auto-Sync",
+            "Syncs every 20 s during playback", creds.autoSync)
+        val syncOnOpenSwitch = buildModernSwitch(context, "Sync on App Open",
+            "Pull latest data when the app starts", creds.syncOnOpen)
+        val syncOnPauseSwitch = buildModernSwitch(context, "Sync on Pause / Close",
+            "Push progress when you pause or exit", creds.syncOnPlaybackEnd)
+        val toastsSwitch = buildModernSwitch(context, "Show Sync Toasts",
+            "Brief on-screen notifications for sync events", creds.showSyncToasts)
+
+        behavCard.addView(autoSyncSwitch)
+        behavCard.addView(divider(context))
+        behavCard.addView(syncOnOpenSwitch)
+        behavCard.addView(divider(context))
+        behavCard.addView(syncOnPauseSwitch)
+        behavCard.addView(divider(context))
+        behavCard.addView(toastsSwitch)
+        root.addView(behavCard)
+        root.addView(spacer(context, 20))
+
+        // ── Primary Actions ───────────────────────────────────────────────────
+        root.addView(sectionLabel(context, "ACTIONS"))
+        root.addView(spacer(context, 8))
+
+        val saveBtn = buildPrimaryButton(context, "⚡  Setup & Sync")
+        val syncBtn = buildSecondaryButton(context, "☁  Sync Now").apply {
+            isEnabled = creds.isConfigured()
+            alpha = if (creds.isConfigured()) 1f else 0.45f
+        }
+
+        val primaryRow = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
-            weightSum = 2f
+            addView(saveBtn, LinearLayout.LayoutParams(0, dp(context, 48), 1f).apply { rightMargin = dp(context, 6) })
+            addView(syncBtn, LinearLayout.LayoutParams(0, dp(context, 48), 1f))
         }
-        
-        val saveBtn = Button(context).apply {
-            text = "Setup & Sync"
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
-                rightMargin = dp(context, 4)
-            }
-        }
-        
-        val syncBtn = Button(context).apply {
-            text = "Sync Now"
+        root.addView(primaryRow)
+        root.addView(spacer(context, 8))
+
+        // Force push / pull
+        val pushBtn = buildOutlineButton(context, "📤  Backup").apply {
             isEnabled = creds.isConfigured()
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
-                leftMargin = dp(context, 4)
-            }
+            alpha = if (creds.isConfigured()) 1f else 0.45f
         }
-        
-        actionLayout.addView(saveBtn)
-        actionLayout.addView(syncBtn)
-        layout.addView(actionLayout)
-        layout.addView(createSpacer(context, 8))
-        
-        val forceLayout = LinearLayout(context).apply {
+        val pullBtn = buildOutlineButton(context, "📥  Restore").apply {
+            isEnabled = creds.isConfigured()
+            alpha = if (creds.isConfigured()) 1f else 0.45f
+        }
+        val forceRow = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
-            weightSum = 2f
+            addView(pushBtn, LinearLayout.LayoutParams(0, dp(context, 44), 1f).apply { rightMargin = dp(context, 6) })
+            addView(pullBtn, LinearLayout.LayoutParams(0, dp(context, 44), 1f))
         }
-        
-        val pushBtn = Button(context).apply {
-            text = "Force Backup"
-            isEnabled = creds.isConfigured()
-            textSize = 12f
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
-                rightMargin = dp(context, 4)
-            }
-        }
-        
-        val pullBtn = Button(context).apply {
-            text = "Force Restore"
-            isEnabled = creds.isConfigured()
-            textSize = 12f
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
-                leftMargin = dp(context, 4)
-            }
-        }
-        
-        forceLayout.addView(pushBtn)
-        forceLayout.addView(pullBtn)
-        layout.addView(forceLayout)
-        layout.addView(createSpacer(context, 12))
+        root.addView(forceRow)
+        root.addView(spacer(context, 20))
 
-        val transferLabel = createLabel(context, "📲 Transfer setup to another device:")
-        layout.addView(transferLabel)
-        layout.addView(createSpacer(context, 4))
+        // ── Transfer Section ──────────────────────────────────────────────────
+        root.addView(sectionLabel(context, "TRANSFER TO ANOTHER DEVICE"))
+        root.addView(spacer(context, 8))
 
-        val transferLayout = LinearLayout(context).apply {
+        val exportBtn = buildOutlineButton(context, "📤  Export Config").apply {
+            isEnabled = creds.isConfigured()
+            alpha = if (creds.isConfigured()) 1f else 0.45f
+        }
+        val importBtn = buildOutlineButton(context, "📥  Import Config")
+        val transferRow = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
-            weightSum = 2f
+            addView(exportBtn, LinearLayout.LayoutParams(0, dp(context, 44), 1f).apply { rightMargin = dp(context, 6) })
+            addView(importBtn, LinearLayout.LayoutParams(0, dp(context, 44), 1f))
         }
+        root.addView(transferRow)
+        root.addView(spacer(context, 20))
 
-        val exportBtn = Button(context).apply {
-            text = "Export Config"
-            isEnabled = creds.isConfigured()
-            textSize = 12f
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
-                rightMargin = dp(context, 4)
-            }
-        }
+        // ── Danger Zone ───────────────────────────────────────────────────────
+        root.addView(sectionLabel(context, "DANGER ZONE"))
+        root.addView(spacer(context, 8))
+        val resetBtn = buildDangerButton(context, "🗑  Reset & Clear Credentials")
+        root.addView(resetBtn)
 
-        val importBtn = Button(context).apply {
-            text = "Import Config"
-            textSize = 12f
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
-                leftMargin = dp(context, 4)
-            }
-        }
+        scrollView.addView(root)
 
-        transferLayout.addView(exportBtn)
-        transferLayout.addView(importBtn)
-        layout.addView(transferLayout)
-        layout.addView(createSpacer(context, 12))
-
-        val resetBtn = Button(context).apply {
-            text = "Reset Extension Credentials"
-            setTextColor(Color.RED)
-            setBackgroundColor(Color.TRANSPARENT)
-            textSize = 12f
-        }
-        layout.addView(resetBtn)
-        
-        scrollView.addView(layout)
-        builder.setView(scrollView)
-        
-        val dialog = builder.create()
+        // ── Build dialog ──────────────────────────────────────────────────────
+        val dialog = AlertDialog.Builder(context)
+            .setView(scrollView)
+            .create()
+        dialog.window?.setBackgroundDrawable(ColorDrawable(CLR_BG))
         dialog.show()
-        
-        // Button Listeners
+        dialog.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+
+        // ── Wire up listeners ─────────────────────────────────────────────────
+        autoSyncSwitch.tag?.let { sw ->
+            (sw as? Switch)?.setOnCheckedChangeListener { _, checked -> updatePreferences(autoSync = checked) }
+        }
+
+        fun getSwitch(row: View) = (row as? LinearLayout)?.getChildAt(1) as? Switch
+
+        getSwitch(autoSyncSwitch)?.setOnCheckedChangeListener { _, c -> updatePreferences(autoSync = c) }
+        getSwitch(syncOnOpenSwitch)?.setOnCheckedChangeListener { _, c -> updatePreferences(syncOnOpen = c) }
+        getSwitch(syncOnPauseSwitch)?.setOnCheckedChangeListener { _, c -> updatePreferences(syncOnPlaybackEnd = c) }
+        getSwitch(toastsSwitch)?.setOnCheckedChangeListener { _, c -> updatePreferences(showSyncToasts = c) }
+
         saveBtn.setOnClickListener {
             val device = deviceInput.text.toString().trim()
             val syncMethod = if (rbPocketbase.isChecked) "pocketbase" else "github"
-            
             val newCreds = creds.copy(
                 deviceName = device,
                 syncMethod = syncMethod,
@@ -608,103 +559,65 @@ object CloudSyncSettings {
                 pbEmail = pbEmailInput.text.toString().trim(),
                 pbPassword = pbPasswordInput.text.toString().trim()
             )
-            
             if (syncMethod == "pocketbase" && (newCreds.pbUrl.isEmpty() || newCreds.pbEmail.isEmpty() || newCreds.pbPassword.isEmpty())) {
-                showToast("Please enter PocketBase URL, Email, and Password")
-                return@setOnClickListener
+                showToast("Please enter PocketBase URL, Email, and Password"); return@setOnClickListener
             }
             if (syncMethod == "github" && newCreds.token.isEmpty()) {
-                showToast("Please enter a GitHub token")
-                return@setOnClickListener
+                showToast("Please enter a GitHub token"); return@setOnClickListener
             }
-            
             saveBtn.isEnabled = false
-            saveBtn.text = "Setting up..."
-            
+            saveBtn.text = "Setting up…"
             setupAndSync(context, newCreds) { result ->
                 Handler(Looper.getMainLooper()).post {
                     saveBtn.isEnabled = true
-                    saveBtn.text = "Setup & Sync"
-                    if (result.success) {
-                        showToast("Setup successful: ${result.message}")
-                        dialog.dismiss()
-                    } else {
-                        showToast("Setup failed: ${result.message}")
-                    }
+                    saveBtn.text = "⚡  Setup & Sync"
+                    if (result.success) { showToast("✅ Setup successful!"); dialog.dismiss() }
+                    else showToast("❌ ${result.message}")
                 }
             }
         }
-        
+
         syncBtn.setOnClickListener {
-            syncBtn.isEnabled = false
-            syncBtn.text = "Syncing..."
+            syncBtn.isEnabled = false; syncBtn.text = "Syncing…"
             manualSync(context) { result ->
                 Handler(Looper.getMainLooper()).post {
-                    syncBtn.isEnabled = true
-                    syncBtn.text = "Sync Now"
-                    if (result.success) {
-                        dialog.dismiss()
-                    }
+                    syncBtn.isEnabled = true; syncBtn.text = "☁  Sync Now"
+                    if (result.success) dialog.dismiss()
                 }
             }
         }
-        
+
         pushBtn.setOnClickListener {
-            pushBtn.isEnabled = false
-            pushBtn.text = "Backing up..."
+            pushBtn.isEnabled = false; pushBtn.text = "Backing up…"
             forcePush(context) { result ->
                 Handler(Looper.getMainLooper()).post {
-                    pushBtn.isEnabled = true
-                    pushBtn.text = "Force Backup"
-                    if (result.success) {
-                        dialog.dismiss()
-                    }
+                    pushBtn.isEnabled = true; pushBtn.text = "📤  Backup"
+                    if (result.success) dialog.dismiss()
                 }
             }
         }
-        
+
         pullBtn.setOnClickListener {
-            pullBtn.isEnabled = false
-            pullBtn.text = "Restoring..."
+            pullBtn.isEnabled = false; pullBtn.text = "Restoring…"
             forcePull(context) { result ->
                 Handler(Looper.getMainLooper()).post {
-                    pullBtn.isEnabled = true
-                    pullBtn.text = "Force Restore"
-                    if (result.success) {
-                        dialog.dismiss()
-                    }
+                    pullBtn.isEnabled = true; pullBtn.text = "📥  Restore"
+                    if (result.success) dialog.dismiss()
                 }
             }
-        }
-        
-        resetBtn.setOnClickListener {
-            AlertDialog.Builder(context)
-                .setTitle("Reset CloudSync")
-                .setMessage("Are you sure you want to clear credentials and reset CloudSync?")
-                .setPositiveButton("Yes") { _, _ ->
-                    resetSync(context)
-                    dialog.dismiss()
-                }
-                .setNegativeButton("No", null)
-                .show()
         }
 
         exportBtn.setOnClickListener {
             val configStr = exportConfigString()
-            if (configStr == null) {
-                showToast("Nothing to export — not configured yet")
-                return@setOnClickListener
-            }
+            if (configStr == null) { showToast("Nothing to export — not configured yet"); return@setOnClickListener }
             val exportEditText = EditText(context).apply {
                 setText(configStr)
-                setTextColor(Color.WHITE)
-                setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 11f)
-                isSingleLine = false
-                isClickable = true
-                isFocusable = true
-                setSelectAllOnFocus(true)
-                setPadding(dp(context, 8), dp(context, 8), dp(context, 8), dp(context, 8))
-                setBackgroundColor(Color.parseColor("#1AFFFFFF"))
+                setTextColor(CLR_TEXT)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+                isSingleLine = false; isClickable = true; isFocusable = true; setSelectAllOnFocus(true)
+                setPadding(dp(context, 12), dp(context, 12), dp(context, 12), dp(context, 12))
+                background = roundedBackground(CLR_SURFACE2, 12f)
+                setHintTextColor(CLR_TEXT_HINT)
             }
             AlertDialog.Builder(context)
                 .setTitle("📤 Export Config")
@@ -722,11 +635,10 @@ object CloudSyncSettings {
         importBtn.setOnClickListener {
             val importEditText = EditText(context).apply {
                 hint = "Paste exported config string here"
-                setTextColor(Color.WHITE)
-                setHintTextColor(Color.GRAY)
+                setTextColor(CLR_TEXT); setHintTextColor(CLR_TEXT_HINT)
                 isSingleLine = false
-                setPadding(dp(context, 8), dp(context, 8), dp(context, 8), dp(context, 8))
-                setBackgroundColor(Color.parseColor("#1AFFFFFF"))
+                setPadding(dp(context, 12), dp(context, 12), dp(context, 12), dp(context, 12))
+                background = roundedBackground(CLR_SURFACE2, 12f)
             }
             AlertDialog.Builder(context)
                 .setTitle("📥 Import Config")
@@ -734,64 +646,368 @@ object CloudSyncSettings {
                 .setView(importEditText)
                 .setPositiveButton("Import & Sync") { _, _ ->
                     val encoded = importEditText.text.toString().trim()
-                    if (encoded.isBlank()) {
-                        showToast("Please paste a config string")
-                        return@setPositiveButton
-                    }
+                    if (encoded.isBlank()) { showToast("Please paste a config string"); return@setPositiveButton }
                     importConfigString(context, encoded) { result ->
                         Handler(Looper.getMainLooper()).post {
-                            if (result.success) {
-                                showToast("✅ Imported! ${result.message}")
-                                dialog.dismiss()
-                            } else {
-                                showToast("❌ ${result.message}")
-                            }
+                            if (result.success) { showToast("✅ Imported! ${result.message}"); dialog.dismiss() }
+                            else showToast("❌ ${result.message}")
                         }
                     }
                 }
                 .setNegativeButton("Cancel", null)
                 .show()
         }
+
+        resetBtn.setOnClickListener {
+            AlertDialog.Builder(context)
+                .setTitle("Reset CloudSync")
+                .setMessage("Are you sure you want to clear credentials and reset CloudSync?")
+                .setPositiveButton("Reset") { _, _ -> resetSync(context); dialog.dismiss() }
+                .setNegativeButton("Cancel", null)
+                .show()
+        }
     }
-    
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // COMPONENT BUILDERS
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /** Gradient header with cloud icon and version */
+    private fun buildHeader(context: Context): View {
+        val card = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            val bg = GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                intArrayOf(Color.parseColor("#2A1F5E"), Color.parseColor("#16132E"))
+            ).apply { cornerRadius = dp(context, 16).toFloat() }
+            background = bg
+            setPadding(dp(context, 20), dp(context, 20), dp(context, 20), dp(context, 20))
+        }
+
+        val icon = TextView(context).apply {
+            text = "☁️"
+            textSize = 36f
+            gravity = Gravity.CENTER
+        }
+        val title = TextView(context).apply {
+            text = "CloudSync"
+            textSize = 22f
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(CLR_TEXT)
+            gravity = Gravity.CENTER
+        }
+        val sub = TextView(context).apply {
+            text = "Cross-device sync for CloudStream  •  v8"
+            textSize = 12f
+            setTextColor(CLR_TEXT_SEC)
+            gravity = Gravity.CENTER
+        }
+        card.addView(icon)
+        card.addView(spacer(context, 4))
+        card.addView(title)
+        card.addView(spacer(context, 2))
+        card.addView(sub)
+        return card
+    }
+
+    /** Status summary card */
+    private fun buildStatusCard(context: Context, creds: SyncCredentials): View {
+        val card = buildCard(context)
+
+        val lastSync = CloudSyncPlugin.getLastSyncTime()
+        val lastMsg  = CloudSyncPlugin.getLastSyncMessage()
+
+        val isConfigured = creds.isConfigured()
+        val dotColor = if (isConfigured) CLR_SUCCESS else CLR_TEXT_HINT
+        val statusText = if (isConfigured) "Connected" else "Not Configured"
+
+        val row = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+
+        val dot = View(context).apply {
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(dotColor)
+            }
+            layoutParams = LinearLayout.LayoutParams(dp(context, 8), dp(context, 8)).apply {
+                rightMargin = dp(context, 8)
+            }
+        }
+        val statusLbl = TextView(context).apply {
+            text = statusText
+            textSize = 13f
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(if (isConfigured) CLR_SUCCESS else CLR_TEXT_SEC)
+        }
+        val methodBadge = TextView(context).apply {
+            if (isConfigured) {
+                text = " ${creds.syncMethod.uppercase()} "
+                textSize = 10f
+                setTextColor(CLR_ACCENT2)
+                background = roundedBackground(Color.parseColor("#1A6C63FF"), 20f)
+                setPadding(dp(context, 6), dp(context, 2), dp(context, 6), dp(context, 2))
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { leftMargin = dp(context, 8) }
+            }
+        }
+        row.addView(dot)
+        row.addView(statusLbl)
+        if (isConfigured) row.addView(methodBadge)
+        card.addView(row)
+        card.addView(spacer(context, 8))
+
+        val timeStr = if (lastSync > 0) {
+            val diff = System.currentTimeMillis() - lastSync
+            when {
+                diff < 60_000     -> "Just now"
+                diff < 3_600_000  -> "${diff / 60_000}m ago"
+                diff < 86_400_000 -> "${diff / 3_600_000}h ago"
+                else              -> "${diff / 86_400_000}d ago"
+            }
+        } else "Never"
+
+        val detailText = if (lastSync > 0) "Last sync: $timeStr  ·  $lastMsg"
+        else "Open settings to configure your sync provider"
+
+        val detail = TextView(context).apply {
+            text = detailText
+            textSize = 12f
+            setTextColor(CLR_TEXT_SEC)
+        }
+        card.addView(detail)
+
+        if (isConfigured && creds.deviceName.isNotBlank()) {
+            card.addView(spacer(context, 4))
+            val device = TextView(context).apply {
+                text = "📱 ${creds.deviceName}"
+                textSize = 11f
+                setTextColor(CLR_TEXT_HINT)
+            }
+            card.addView(device)
+        }
+        return card
+    }
+
+    /** Section header label */
+    private fun sectionLabel(context: Context, text: String): TextView {
+        return TextView(context).apply {
+            this.text = text
+            textSize = 10.5f
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(CLR_ACCENT2)
+            letterSpacing = 0.12f
+        }
+    }
+
+    /** Field label above an input */
+    private fun fieldLabel(context: Context, text: String): TextView {
+        return TextView(context).apply {
+            this.text = text
+            textSize = 12f
+            setTextColor(CLR_TEXT_SEC)
+            setPadding(0, 0, 0, dp(context, 4))
+        }
+    }
+
+    /** A rounded surface card */
+    private fun buildCard(context: Context): LinearLayout {
+        return LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            val p = dp(context, 14)
+            setPadding(p, p, p, p)
+            background = roundedBackground(CLR_SURFACE, 16f)
+        }
+    }
+
+    /** Styled EditText */
+    private fun buildInput(
+        context: Context,
+        value: String,
+        hintVal: String,
+        inputType: Int = InputType.TYPE_CLASS_TEXT
+    ): EditText {
+        return EditText(context).apply {
+            this.inputType = inputType
+            setText(value)
+            hint = hintVal
+            textSize = 14f
+            setTextColor(CLR_TEXT)
+            setHintTextColor(CLR_TEXT_HINT)
+            setPadding(dp(context, 12), dp(context, 10), dp(context, 12), dp(context, 10))
+            background = roundedBorderBackground(context, CLR_SURFACE2, CLR_DIVIDER, 10f)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(context, 2); bottomMargin = dp(context, 2) }
+        }
+    }
+
+    /** Radio-style pill button */
+    private fun buildRadioPill(context: Context, label: String, selected: Boolean): RadioButton {
+        return RadioButton(context).apply {
+            text = label
+            isChecked = selected
+            textSize = 13f
+            buttonDrawable = null // hide default radio circle
+            gravity = Gravity.CENTER
+            setPadding(dp(context, 10), dp(context, 10), dp(context, 10), dp(context, 10))
+            setTextColor(if (selected) CLR_TEXT else CLR_TEXT_SEC)
+            background = if (selected)
+                roundedBackground(CLR_ACCENT, 10f)
+            else
+                roundedBorderBackground(context, CLR_SURFACE, CLR_DIVIDER, 10f)
+        }
+    }
+
+    /** Update pill button selection state */
+    private fun updatePillStyle(context: Context, btn: RadioButton, selected: Boolean) {
+        btn.setTextColor(if (selected) CLR_TEXT else CLR_TEXT_SEC)
+        btn.background = if (selected)
+            roundedBackground(CLR_ACCENT, 10f)
+        else
+            roundedBorderBackground(context, CLR_SURFACE, CLR_DIVIDER, 10f)
+    }
+
+    /** A switch row with title and subtitle */
+    private fun buildModernSwitch(context: Context, title: String, subtitle: String, checked: Boolean): LinearLayout {
+        val sw = Switch(context).apply {
+            isChecked = checked
+            // Tint thumb & track
+            thumbTintList = ColorStateList(
+                arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf()),
+                intArrayOf(CLR_ACCENT, CLR_TEXT_HINT)
+            )
+            trackTintList = ColorStateList(
+                arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf()),
+                intArrayOf(Color.parseColor("#4D6C63FF"), CLR_SURFACE2)
+            )
+        }
+
+        val texts = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            val titleView = TextView(context).apply {
+                text = title; textSize = 14f; setTextColor(CLR_TEXT)
+            }
+            val subtitleView = TextView(context).apply {
+                text = subtitle; textSize = 11f; setTextColor(CLR_TEXT_SEC)
+                setPadding(0, dp(context, 2), 0, 0)
+            }
+            addView(titleView); addView(subtitleView)
+        }
+
+        return LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(context, 6), 0, dp(context, 6))
+            addView(texts, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            addView(sw)
+            tag = sw   // store ref for later listener attachment
+            setOnClickListener { sw.isChecked = !sw.isChecked }
+        }
+    }
+
+    /** Solid accent primary button */
+    private fun buildPrimaryButton(context: Context, label: String): Button {
+        return Button(context).apply {
+            text = label
+            textSize = 13f
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(Color.WHITE)
+            background = roundedBackground(CLR_ACCENT, 12f)
+            setPadding(dp(context, 8), 0, dp(context, 8), 0)
+        }
+    }
+
+    /** Surface secondary button */
+    private fun buildSecondaryButton(context: Context, label: String): Button {
+        return Button(context).apply {
+            text = label
+            textSize = 13f
+            setTextColor(CLR_ACCENT2)
+            background = roundedBackground(CLR_SURFACE2, 12f)
+            setPadding(dp(context, 8), 0, dp(context, 8), 0)
+        }
+    }
+
+    /** Outlined button */
+    private fun buildOutlineButton(context: Context, label: String): Button {
+        return Button(context).apply {
+            text = label
+            textSize = 12f
+            setTextColor(CLR_TEXT_SEC)
+            background = roundedBorderBackground(context, CLR_SURFACE, CLR_DIVIDER, 10f)
+            setPadding(dp(context, 8), 0, dp(context, 8), 0)
+        }
+    }
+
+    /** Danger / destructive button */
+    private fun buildDangerButton(context: Context, label: String): Button {
+        return Button(context).apply {
+            text = label
+            textSize = 13f
+            setTextColor(CLR_DANGER)
+            background = roundedBorderBackground(context, CLR_SURFACE, Color.parseColor("#3DFF5252"), 12f)
+            setPadding(dp(context, 8), 0, dp(context, 8), 0)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(context, 48)
+            )
+        }
+    }
+
+    /** Thin horizontal divider */
+    private fun divider(context: Context): View {
+        return View(context).apply {
+            setBackgroundColor(CLR_DIVIDER)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 1
+            ).apply { topMargin = dp(context, 4); bottomMargin = dp(context, 4) }
+        }
+    }
+
+    /** Transparent spacer */
+    private fun spacer(context: Context, heightDp: Int): View {
+        return View(context).apply {
+            layoutParams = ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(context, heightDp)
+            )
+        }
+    }
+
+    // ── Drawing helpers ────────────────────────────────────────────────────────
+
+    private fun roundedBackground(color: Int, radiusDp: Float): GradientDrawable {
+        return GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            setColor(color)
+            cornerRadius = radiusDp
+        }
+    }
+
+    private fun roundedBorderBackground(
+        context: Context, fillColor: Int, strokeColor: Int, radiusDp: Float
+    ): GradientDrawable {
+        return GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            setColor(fillColor)
+            cornerRadius = radiusDp
+            setStroke(dp(context, 1), strokeColor)
+        }
+    }
+
+    // ── Utility ────────────────────────────────────────────────────────────────
+
     private fun dp(context: Context, value: Int): Int {
         return TypedValue.applyDimension(
             TypedValue.COMPLEX_UNIT_DIP,
             value.toFloat(),
             context.resources.displayMetrics
         ).toInt()
-    }
-    
-    private fun createLabel(context: Context, textVal: String): TextView {
-        return TextView(context).apply {
-            text = textVal
-            textSize = 12f
-            setTextColor(Color.LTGRAY)
-            setPadding(0, dp(context, 4), 0, 0)
-        }
-    }
-    
-    private fun createSpacer(context: Context, heightDp: Int): View {
-        return View(context).apply {
-            layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(context, heightDp))
-        }
-    }
-    
-    private fun createSwitch(context: Context, textVal: String, isCheckedVal: Boolean): Switch {
-        return Switch(context).apply {
-            text = textVal
-            isChecked = isCheckedVal
-            setTextColor(Color.WHITE)
-            setPadding(0, dp(context, 6), 0, dp(context, 6))
-            setOnCheckedChangeListener { _, checked ->
-                when (textVal) {
-                    "Real-time Auto-Sync" -> updatePreferences(autoSync = checked)
-                    "Sync on App Open" -> updatePreferences(syncOnOpen = checked)
-                    "Sync on Playback Pause/End" -> updatePreferences(syncOnPlaybackEnd = checked)
-                    "Show Sync Toasts" -> updatePreferences(showSyncToasts = checked)
-                }
-            }
-        }
     }
 
     private fun showToast(message: String) {
