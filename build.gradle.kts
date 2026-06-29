@@ -60,7 +60,7 @@ subprojects {
     }
 
     cloudstream {
-        setRepo(System.getenv("GITHUB_REPOSITORY") ?: "https://github.com/user/cloudstream-sync")
+        setRepo(System.getenv("GITHUB_REPOSITORY") ?: "https://github.com/DeepBlue9789/cloudsync")
     }
 
     dependencies {

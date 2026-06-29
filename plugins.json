@@ -1,26 +1,23 @@
 [
-    {
-        "iconUrl": "https://raw.githubusercontent.com/DeepBlue9789/cloudsync/main/icon.png",
-        "fileHash": "sha256-ab54ef7c47af37fb5f977d5565fccf5601fde8f1a05a6d89c2e9e5708bbdebaa",
-        "apiVersion": 1,
-        "repositoryUrl": "https://github.com/user/cloudstream-sync",
-        "fileSize": 84342,
-        "status": 1,
-        "language": "en",
-        "authors": [
-            "CloudSyncDev"
-        ],
-        "tvTypes": [
-            "Movie",
-            "TvSeries",
-            "Anime",
-            "OVA",
-            "Cartoon"
-        ],
-        "version": 7,
-        "internalName": "CloudSync",
-        "description": "Seamless cross-device sync for CloudStream. Syncs exact playback position (millisecond precision), watch history, continue watching, episode/season progress, and source preferences between all your devices via a private GitHub Gist. Just pause on one device and pick up right where you left off on another \u2014 no extra restarts needed.",
-        "url": "https://raw.githubusercontent.com/user/cloudstream-sync/builds/CloudSync.cs3",
-        "name": "CloudSync"
-    }
+  {
+    "name": "CloudSync",
+    "internalName": "CloudSync",
+    "description": "Seamless cross-device sync for CloudStream. Syncs exact playback position, watch history, continue watching, episode progress, and source preferences between all your devices via a private GitHub Gist.",
+    "version": 8,
+    "url": "https://raw.githubusercontent.com/DeepBlue9789/cloudsync/main/CloudSync.cs3",
+    "authors": [
+      "CloudSyncDev"
+    ],
+    "tvTypes": [
+      "Movie",
+      "TvSeries",
+      "Anime",
+      "OVA",
+      "Cartoon"
+    ],
+    "language": "en",
+    "hasSettings": true,
+    "iconUrl": "https://raw.githubusercontent.com/DeepBlue9789/cloudsync/main/icon.png",
+    "status": 1
+  }
 ]

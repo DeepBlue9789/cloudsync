@@ -36,9 +36,10 @@ cloudstream {
 tasks.named("make") {
     doLast {
         val buildDir = layout.buildDirectory.get().asFile
+        // Only copy the .cs3 binary — plugins.json in the root is maintained manually
+        // to ensure the correct version, URL, and metadata are always present.
         copy {
             from(File(buildDir, "CloudSync.cs3"))
-            from(File(buildDir, "plugins.json"))
             into(project.rootDir)
         }
     }
