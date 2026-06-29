@@ -14,6 +14,7 @@ import com.lagradost.cloudstream3.utils.DataStore.getSharedPrefs
 import com.lagradost.cloudstream3.CloudStreamApp.Companion.getKey
 import com.lagradost.cloudstream3.CloudStreamApp.Companion.setKey
 import kotlinx.coroutines.*
+import java.util.concurrent.atomic.AtomicBoolean
 
 @CloudstreamPlugin
 class CloudSyncPlugin : Plugin() {
@@ -27,11 +28,17 @@ class CloudSyncPlugin : Plugin() {
     private var lifecycleCallbacks: android.app.Application.ActivityLifecycleCallbacks? = null
     private var registeredApp: android.app.Application? = null
 
+    /** Unique instance ID to prevent leaks when plugin is hot-reloaded */
+    private val instanceId = System.identityHashCode(this).toString()
+
+    private fun isCurrentInstance(): Boolean {
+        return System.getProperty("CloudSync_Active_Instance") == instanceId
+    }
+
     // ── Sync State ────────────────────────────────────────────────────────────
 
     /** True when a sync is currently in-flight */
-    @Volatile
-    private var isSyncing = false
+    private val isSyncing = AtomicBoolean(false)
 
     /** True when another sync has been requested while one is in-flight */
     @Volatile
@@ -177,6 +184,9 @@ class CloudSyncPlugin : Plugin() {
     }
 
     override fun load(context: Context) {
+        // Register this instance as the single active instance
+        System.setProperty("CloudSync_Active_Instance", instanceId)
+
         activity = context as? AppCompatActivity
 
         // Register the CloudSync MainAPI provider
@@ -253,6 +263,11 @@ class CloudSyncPlugin : Plugin() {
             val prefs = context.getSharedPrefs()
 
             prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { sharedPrefs, key ->
+                if (!isCurrentInstance()) {
+                    sharedPrefs.unregisterOnSharedPreferenceChangeListener(prefsListener)
+                    pluginScope.cancel()
+                    return@OnSharedPreferenceChangeListener
+                }
                 if (key == null) return@OnSharedPreferenceChangeListener
 
                 when {
@@ -365,10 +380,15 @@ class CloudSyncPlugin : Plugin() {
 
             lifecycleCallbacks = object : android.app.Application.ActivityLifecycleCallbacks {
                 override fun onActivityStarted(activity: android.app.Activity) {
+                    if (!isCurrentInstance()) return
                     startedActivityCount++
                 }
 
                 override fun onActivityStopped(activity: android.app.Activity) {
+                    if (!isCurrentInstance()) {
+                        registeredApp?.unregisterActivityLifecycleCallbacks(this)
+                        return
+                    }
                     startedActivityCount--
 
                     val activityName = activity.javaClass.simpleName
@@ -391,6 +411,7 @@ class CloudSyncPlugin : Plugin() {
                 }
 
                 override fun onActivityPaused(activity: android.app.Activity) {
+                    if (!isCurrentInstance()) return
                     // Sync when MainActivity is paused with dirty data
                     // (covers: user pressed Home while watching, or system killed app)
                     val activityName = activity.javaClass.simpleName
@@ -437,6 +458,10 @@ class CloudSyncPlugin : Plugin() {
             Log.d(TAG, "Periodic sync timer started (${PERIODIC_TICK_MS / 1000}s interval)")
 
             while (isActive) {
+                if (!isCurrentInstance()) {
+                    pluginScope.cancel()
+                    break
+                }
                 delay(PERIODIC_TICK_MS)
 
                 if (!isDirty) {
@@ -481,7 +506,7 @@ class CloudSyncPlugin : Plugin() {
         }
 
         // If already syncing, queue one follow-up
-        if (isSyncing) {
+        if (isSyncing.get()) {
             syncQueued = true
             Log.d(TAG, "Sync request ($trigger) queued — sync already in-flight")
             return
@@ -499,14 +524,13 @@ class CloudSyncPlugin : Plugin() {
      * Uses fullSyncWithRateInfo to detect 429/403 responses and adjust intervals.
      */
     private suspend fun executeSync(context: Context, trigger: String) {
-        if (isSyncing) {
+        if (!isSyncing.compareAndSet(false, true)) {
             syncQueued = true
             return
         }
 
         var keepGoing: Boolean
         do {
-            isSyncing = true
             syncQueued = false
             try {
                 val creds = getCredentials()
@@ -556,7 +580,7 @@ class CloudSyncPlugin : Plugin() {
             } finally {
                 keepGoing = syncQueued
                 if (!keepGoing) {
-                    isSyncing = false
+                    isSyncing.set(false)
                 }
             }
         } while (keepGoing)
