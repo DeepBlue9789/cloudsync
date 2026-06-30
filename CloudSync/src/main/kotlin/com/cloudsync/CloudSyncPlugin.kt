@@ -140,13 +140,6 @@ class CloudSyncPlugin : Plugin() {
          * Trigger CloudStream's UI reload events via reflection so that
          * freshly synced data (bookmarks, continue watching, etc.) appears
          * without requiring a manual app restart.
-         *
-         * bookmarksUpdatedEvent, reloadHomeEvent, and reloadLibraryEvent are
-         * Event<Boolean> FIELDS in MainActivity's companion object — not methods.
-         * We must:
-         *   1. Get the Companion object via the static "Companion" field.
-         *   2. Reflectively read the Event<Boolean> field from it.
-         *   3. Call the Event's invoke() operator (i.e. Event.invoke(true)).
          */
         fun triggerUIRefresh() {
             try {
@@ -163,22 +156,43 @@ class CloudSyncPlugin : Plugin() {
 
                 // Fire each event on the main thread
                 for (eventName in listOf("bookmarksUpdatedEvent", "reloadHomeEvent", "reloadLibraryEvent")) {
+                    var eventObj: Any? = null
+                    
                     try {
-                        val eventField = companion.javaClass.getDeclaredField(eventName)
-                        eventField.isAccessible = true
-                        val eventObj = eventField.get(companion)
-                            ?: continue
-                        // Event<Boolean>.invoke(value: Boolean) — the JVM erases generics,
-                        // so the method signature is invoke(Object)
-                        val invokeMethod = eventObj.javaClass.getMethod("invoke", Any::class.java)
-                        invokeMethod.invoke(eventObj, true)
-                        Log.d(TAG, "Triggered $eventName")
+                        // 1. Try getter on Companion object (e.g. getReloadHomeEvent())
+                        val getterName = "get" + eventName.replaceFirstChar { it.uppercase() }
+                        val getterMethod = companion.javaClass.getMethod(getterName)
+                        eventObj = getterMethod.invoke(companion)
                     } catch (e: Exception) {
-                        Log.w(TAG, "Could not trigger $eventName: ${e.message}")
+                        try {
+                            // 2. Try backing field on MainActivity directly (Kotlin default for Companion vals)
+                            val eventField = mainActivityClass.getDeclaredField(eventName)
+                            eventField.isAccessible = true
+                            eventObj = eventField.get(null)
+                        } catch (e2: Exception) {
+                            try {
+                                // 3. Try field on Companion object
+                                val eventField = companion.javaClass.getDeclaredField(eventName)
+                                eventField.isAccessible = true
+                                eventObj = eventField.get(companion)
+                            } catch (e3: Exception) {
+                                Log.w(TAG, "Could not find $eventName")
+                            }
+                        }
+                    }
+                    
+                    if (eventObj != null) {
+                        try {
+                            val invokeMethod = eventObj.javaClass.getMethod("invoke", Any::class.java)
+                            invokeMethod.invoke(eventObj, true)
+                            Log.d(TAG, "Triggered $eventName")
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Could not invoke $eventName: ${e.message}")
+                        }
                     }
                 }
             } catch (e: Exception) {
-                Log.w(TAG, "Could not find MainActivity for UI refresh: ${e.message}")
+                Log.e(TAG, "Failed to trigger UI refresh: ${e.message}")
             }
         }
     }
@@ -216,7 +230,6 @@ class CloudSyncPlugin : Plugin() {
                     if (result.success) {
                         if (result.itemsPulled > 0) {
                             withContext(Dispatchers.Main) {
-                                triggerUIRefresh()
                                 if (creds.showSyncToasts) showToast("☁️ Synced: ${result.message}")
                             }
                         } else {
@@ -561,6 +574,12 @@ class CloudSyncPlugin : Plugin() {
                     isDirty = false
                     syncMinIntervalMs = DEFAULT_MIN_INTERVAL_MS
                     Log.d(TAG, "Sync ($trigger) success: ${result.message}")
+
+                    if (result.itemsPulled > 0) {
+                        withContext(Dispatchers.Main) {
+                            triggerUIRefresh()
+                        }
+                    }
 
                     if (creds.showSyncToasts) {
                         withContext(Dispatchers.Main) {
